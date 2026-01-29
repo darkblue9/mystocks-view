@@ -1,0 +1,20 @@
+function doPost(e) {
+  const id = (e.parameter.id || 'default');
+  const data = JSON.parse(e.postData.contents || '{}');
+  const name = id + '.json';
+  let it = DriveApp.getFilesByName(name);
+  let file = it.hasNext() ? it.next() : DriveApp.createFile(name, '{}', 'application/json');
+  file.setContent(JSON.stringify(data));
+  return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
+}
+function doGet(e) {
+  const id = (e.parameter.id || 'default');
+  const name = id + '.json';
+  let it = DriveApp.getFilesByName(name);
+  if (it.hasNext()) {
+    const txt = it.next().getBlob().getDataAsString('UTF-8');
+    return ContentService.createTextOutput(txt).setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify({rows:[], settings:{}}))
+         .setMimeType(ContentService.MimeType.JSON);
+}

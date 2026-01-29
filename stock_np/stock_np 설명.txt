@@ -1,0 +1,989 @@
+
+----------------------------------------
+노드 설치
+https://nodejs.org/ko/download
+
+노드 설치 확인
+콘솔에서
+
+node -v
+
+----------------------------------------
+프록시 서버 만들기
+
+임의의 폴더를 만든다
+F:\0_Tech\00_Stock\StockProxy\
+
+naver-proxy-utf8.cjs 파일을 만든다
+
+
+## 해야하는지 모르겠음 ㅠ
+프록시 폴더 안에서 라이브러리 설치한다.
+
+npm init -y
+npm install express node-fetch@2 cors
+##
+----------------------------------------
+
+사용하기
+
+PowerShell에서
+
+f:
+cd F:\0_Tech\00_Stock\StockProxy\
+node naver-proxy-utf8.cjs
+
+브라우저에서
+
+file:///F:/0_Tech/00_Stock/stock_np/index_proxy_dashboard_v3_4h_compact_live_fee_keepui.html
+
+알림 허용
+
+----------------------------------
+클라우드 버전 만들기
+https://darkblue9.github.io/stock-dashboard/stock_dashboardc.html
+
+깃허브 repository 생성
+https://github.com/ 접속
+New repository
+이름: 예) stock-dashboard (공개 Public로 둬도 돼)
+작성후 Create repository 클릭 (README 체크 안 해도 됨)
+
+그 화면에서 상단 중앙 부분쯤에 있는 파란색 링크 “uploading an existing file” 클릭후 파일 업로드
+
+상단 Settions 메뉴
+왼쪽 Pages 메뉴
+Settings → Pages → Branch: main / root → Save
+→ GitHub Pages 주소 생김.(1~2분 기다리면)
+
+AKfycbz9ZQB_vvGIkRVbURaj4g8pdeSf2Dy1GoRvn_1F1T_q8lJqvo6DmXZpt6V9-5XjxuvhUA
+
+CLOUD_URL 에 넣을거임
+https://script.google.com/macros/s/AKfycbz9ZQB_vvGIkRVbURaj4g8pdeSf2Dy1GoRvn_1F1T_q8lJqvo6DmXZpt6V9-5XjxuvhUA/exec
+
+----------------------------------------
+클라우드 동기화 연결 (Google Apps Script)
+- 데이터 동기화용
+
+https://script.google.com
+ 새 프로젝트 만들고 아래 코드 붙여넣기 → 저장
+기존 빈 함수는 지움
+
+상단 Deploy → New deployment → Web app
+
+Execute as: Me
+
+Who has access: Anyone with the link
+
+Deploy → 나온 웹앱 URL 복사, 위에 exec 붙은거 (이게 CLOUD_URL)
+
+https://script.google.com/home/projects/1_gI_JmLjTAmO2_O-0T7J7ak8-NS2XuwWuKsAoORcM6H4sOl1VnA1LKNY/edit
+
+----------------------------------------
+클라우드 동기화 연결 (Cloudflare Worker)
+- 실시간 가격 조회용 (프록시 대체)
+
+1. Cloudflare 가입 → Workers & Pages → Create Worker
+https://www.cloudflare.com/ko-kr/
+
+2. 소스 적용
+https://stock-dashboard.respite9.workers.dev/
+
+https://dash.cloudflare.com/743c2049d0be7dd3bb4ae516a902f18f/workers/services/view/stock-dashboard/production
+
+3. 프록시 입력란에 추가
+
+테스트
+
+단일:
+https://stock-dashboard.respite9.workers.dev/api/price?code=005930
+
+멀티:
+https://stock-dashboard.respite9.workers.dev/api/prices?codes=005930,000660,035420
+
+----------------------------------------
+GitHub에서 파일 열기 → 연필(편집) → 아래 줄 찾아 URL 넣고 Commit changes:
+
+const CLOUD_URL = "여기에_웹앱_URL";   // 예: https://script.google.com/macros/s/AKfycb.../exec
+// 필요하면 키 바꾸기 (계정/전략별 구분용)
+const CLOUD_ID  = "stock-dashboard-rows";
+
+https://github.com/darkblue9/stock-dashboard
+
+----------------------------------------
+자동 불러오기도 가능(선택):
+window.addEventListener('load', ()=> { if (CLOUD_URL) cloudLoad(); });
+
+자동 저장도 가능:
+setInterval(()=> { if (CLOUD_URL) cloudSave(); }, 5*60*1000); // 5분마다
+
+----------------------------------------
+현재 컬럼들의 픽셀을 구하기
+F12 - Console 탭
+allow pasting 입력후 엔터
+아래 코드 입력후 엔터
+
+(()=>{const ths=[...document.querySelectorAll('#grid thead th')];const names=ths.map(th=>th.textContent.trim());const w=ths.map(th=>Math.round(th.getBoundingClientRect().width));const lines=names.map((n,i)=>`${n}: ${w[i]}px`);console.table(names.reduce((o,n,i)=>(o[n]=w[i]+'px',o),{}));alert('컬럼폭(px)\n\n'+lines.join('\n'));})();
+
+----------------------------------------
+기능추가
+
+1. 각 컬럼의 픽셀을 알려줘
+2. 주수 컬럼에 값이 있을경우 주수 셀의 섹을 #99ffcc로 해줘
+3. 맨왼쪽에 일련번호 컬럼 추가해줘
+4. 주수컬럼에 값이 있는건 상단에 놔두고 값이 없는것만 오름차순 정렬하는 버튼을 상단에 추가 해줘
+5. 배지가 보기 너무 불편해. 가격을 5분마다 기록한다고 했잖아. 그럼 현재 방식은 제거해줘. 현재가 아래에 점멸을 5개 나란히 보여주자. 
+최근 저장된 5개 가격을 기준으로 하자.
+아래에 5분부터 25분으로 예를 들었지만... 실제로는 바로 직전 5개 가격이겠지
+6.
+1번째 점멸 : 5분전 가격과 비교하여 현재가가 높으면 적색점멸, 낮으면 청색점멸
+2번째 점멸 : 10분전 가격과 비교하여 현재가가 높으면 적색점멸, 낮으면 청색점멸
+3번째 점멸 : 15분전 가격과 비교하여 현재가가 높으면 적색점멸, 낮으면 청색점멸
+4번째 점멸 : 20분전 가격과 비교하여 현재가가 높으면 적색점멸, 낮으면 청색점멸
+5번째 점멸 : 25분전 가격과 비교하여 현재가가 높으면 적색점멸, 낮으면 청색점멸
+이렇게 하면 상승중인지 하락중인지 알수 있을거 같아
+7.
+상단에 "목표가 세팅" 이라는 버튼을 추가하고 클릭했을때 상목표 컬럼은 - 현재가 기준 10만원 이상일 경우 +4000원, 10만원 이하일 경우 +400원 하목표 컬럼은 - 현재가 기준 10만원 이상일 경우 -4000원, 10만원 이하일 경우 -400원 으로 세팅해줘
+
+========================================
+사용하기
+
+----------------------------------------
+로컬 프록시
+f:
+cd F:\0_Tech\00_Stock\StockProxy\
+node naver-proxy-utf8.cjs
+
+----------------------------------------
+대시보드 설정
+
+프록시 입력란: 
+기존: 
+http://localhost:3000
+신규: 
+https://stock-dashboard.respite9.workers.dev
+
+엔드포인트: 자동(또는 멀티)
+
+코드파라미터: code
+
+가격키(JSON): price (이미 맞춰둠)
+
+----------------------------------------
+https://darkblue9.github.io/stock-dashboard/stock_dashboardc.html
+
+========================================
+테스트
+
+https://stock-dashboard.respite9.workers.dev/api/price?code=005930
+
+https://stock-dashboard.respite9.workers.dev/api/prices?codes=005930,000660,035420
+
+http://localhost:3000/api/prices?codes=005930,000660,035420
+
+
+https://darkblue9.github.io/api/prices?codes=010140,000250,178320,068270,090430,124500,298380,278470,290650,066970,466100,039490,047810,008930,128940,018880,000880,042660,064350,005380
+
+{"data":[{"code":"005930","price":103100},{"code":"000660","price":0},{"code":"035420","price":0}]}
+{"data":[{"code":"005930","price":103100},{"code":"000660","price":617000},{"code":"035420","price":263500}]}
+
+========================================
+=CONCAT("INSERT INTO Npaystocks (날짜, 구분, 종목명, 현재가, 전일비, 등락률, 거래량, 시가총액) VALUES ('" , A2 , "','" , B2 , "','" , C2 ,"',", D2, ",'", E2, "',", F2 * 100, ",", G2, ",", H2, ");")
+
+========================================
+
+select 종목명,count(종목명) cnt from Npaystocks
+group by 종목명
+order by cnt desc
+
+select 날짜 from Npaystocks
+group by 날짜
+
+========================================
+테이블에 들어 있는 가장 최근 3개 거래일에 모두 등장한 종목
+
+-- 최근 3개 날짜
+WITH latest3 AS (
+    SELECT DISTINCT 날짜
+    FROM Npaystocks
+    ORDER BY 날짜 DESC
+    LIMIT 3
+)
+SELECT
+    종목명,
+    COUNT(DISTINCT 날짜) AS 등장일수
+FROM Npaystocks
+WHERE 날짜 IN (SELECT 날짜 FROM latest3)
+GROUP BY 종목명
+HAVING COUNT(DISTINCT 날짜) = 3      -- 3일 모두 존재
+ORDER BY 종목명;
+
+========================================
+
+테이블에서 가장 최근 날짜 = 오늘이라고 보고
+
+그 날짜에 등장한 종목들에 대해
+
+뒤로 거슬러 올라가며 중간에 빠진 날이 나오기 전까지 몇 일 연속으로 있는지 계산
+
+-- 1. 전체 거래일에 번호 붙이기
+WITH trading_days AS (
+    SELECT DISTINCT 날짜
+    FROM Npaystocks
+    ORDER BY 날짜
+),
+numbered_days AS (
+    SELECT
+        날짜,
+        ROW_NUMBER() OVER (ORDER BY 날짜) AS day_seq
+    FROM trading_days
+),
+
+-- 2. 종목별로 날짜 + 연속분석용 번호 붙이기
+stock_days AS (
+    SELECT
+        n.종목명,
+        n.날짜,
+        d.day_seq,
+        ROW_NUMBER() OVER (
+            PARTITION BY n.종목명
+            ORDER BY n.날짜
+        ) AS rn
+    FROM Npaystocks n
+    JOIN numbered_days d USING (날짜)
+),
+
+-- 3. 연속구간 식별용 키 (day_seq - rn 가 같은 것끼리 한 덩어리)
+groups AS (
+    SELECT
+        종목명,
+        날짜,
+        day_seq,
+        rn,
+        day_seq - rn AS grp
+    FROM stock_days
+),
+
+-- 4. 전체 데이터 중 가장 최근 날짜(오늘)
+latest_date AS (
+    SELECT MAX(날짜) AS max_date
+    FROM Npaystocks
+),
+
+-- 5. 각 종목에서 "오늘"이 속한 구간(grp)만 뽑기
+current_streak_group AS (
+    SELECT g.종목명, g.grp
+    FROM groups g
+    JOIN latest_date l
+      ON g.날짜 = l.max_date
+)
+
+-- 6. 그 구간에 포함된 일수 = 현재 연속 일수
+SELECT
+    g.종목명,
+    COUNT(*) AS 연속일수
+FROM groups g
+JOIN current_streak_group c
+  ON g.종목명 = c.종목명
+ AND g.grp     = c.grp
+GROUP BY g.종목명
+ORDER BY 연속일수 DESC, g.종목명;
+
+========================================
+
+🎯 결론만 먼저 말하면:
+“연속일수가 많다는 것 자체는 매수 근거가 되지 않는다.”
+
+하지만
+
+“연속일수가 많을 때 유리한 경우도 있고, 아주 위험한 경우도 있다.”
+
+정답은 “상황 따라 완전 다르다”… 라는 뻔한 말이 아니라,
+왜 그런지 아주 명확하게 설명해줄게.
+
+🟦 1) 연속일수가 크다는 건 뭘 의미하냐?
+
+네이버 상위 상승률 목록에 연속 등장한다는 건:
+
+단타 수급이 몰리고 있고
+
+변동성이 계속 높고
+
+단기 관심도가 높다는 뜻이야.
+
+즉 **“강한 단기 수급”**이라는 사실 하나는 확실하다.
+
+이건 단타에선 기회가 될 수도 있음.
+
+🟥 2) 하지만 연속일수가 크면 위험 요소가 훨씬 커짐
+
+왜냐면 상위 상승률에 계속 잡히는 종목은 특징이 있다:
+
+✔ 1) 이미 여러 날 과열
+
+공매도 세력 유입
+
+단기 차익 실현 물량 대기
+
+데이 트레이더 숫자가 폭증
+
+변동 폭이 비정상적으로 커짐
+
+✔ 2) “역추세 급락”이 자주 나옴
+
+연속 상승일이 3~5일 넘어가는 시점부터는
+고점에서 음봉 두 번이면 끝인 경우 많음.
+
+✔ 3) 이미 너무 늦게 탄 경우일 수 있음
+
+상승률 TOP 리스트에 들어오면,
+그 시점은 이미 아침부터 초단타들이 몇 번 털고 간 뒤인 경우가 절반 이상.
+
+즉 “연속일수 많음 = 이미 식어가는 불판일 가능성.”
+
+🟩 3) 연속일수가 많아도 “이럴 때는 사도 유리”
+✔ 조건 1: 상승률은 높지만 거래량은 점점 줄고, 음봉 없는 4~7일 상승
+
+→ 수급이 무는 중
+→ 위로 한 번 더 치는 패턴 존재
+
+✔ 조건 2: 연속일수 3 이상 + 다음 날 ‘눌림목 갭다운 출발’
+
+→ 이게 가장 먹히는 패턴
+→ 연속으로 올랐지만
+→ 다음 날 “갭 + 눌림” 패턴 → 재돌파 시 고수익 가능
+
+✔ 조건 3: 단기 고점 돌파 직전 + 거래량 과도 증가 없음
+
+→ 데이 트레이더 물량 감소 → 매수자 질이 높아짐
+
+🟧 4) 연속일수가 많으면 절대 사면 안 되는 경우
+❌ 1) 장대양봉 2~3개 이상 나온 상태
+
+→ 이미 고점. 세력도 익절 타이밍.
+
+❌ 2) 연속일수 올라가는데 거래량이 계속 증가
+
+→ 데이·스캘퍼 난입
+→ 고점 뺑소니 급락 패턴 90%
+
+❌ 3) 상승률이 20% 이상 급등하는 날 포함
+
+→ 다음날 고점 매물폭탄 대기
+
+🟦 5) 그래서 “투자에 유리한가?”의 진짜 정답
+✔ **연속일수 자체는 ‘신호’는 맞다.
+
+→ 단기 강세의 신호.
+→ 관심종목 필터링용으로는 매우 유용.**
+
+❌ 하지만 매수 근거로는 절대 단독으로 쓰면 안 된다.
+
+→ 변동성이 너무 크고 승률이 급락함
+
+✔ 진짜 유리한 시점은:
+
+“연속 등장 → 1~2일 쉬었다 → 거래량 감소 → 재돌파하는 첫날”
+
+이때가 단타·스윙에서 승률 가장 좋다.
+
+⭐ 동일을 위한 추천 분석 컬럼
+
+네가 지금 DB 만들었잖아?
+여기다가 아래 컬럼을 하나 추가하면 좋다:
+
+전일대비 거래량 비율 (volume_ratio)
+
+고가/저가 변동폭
+
+날짜 이동평균 vs 등락률
+
+그러면 “연속일수 + 거래량 패턴”을 조합해서
+정확한 진입 시그널을 만들 수 있다.
+
+========================================
+
+1. 일별 기본 분석 뷰 (거래량 변화까지 포함)
+🔹 v_stock_daily_analysis
+CREATE VIEW IF NOT EXISTS v_stock_daily_analysis AS
+SELECT
+    날짜,
+    구분,
+    종목명,
+    현재가,
+    전일비,
+    등락률,
+    거래량,
+    전일거래량,
+    -- 전일 대비 거래량 변화율 (예: 0.50 = 50% 증가, -0.30 = 30% 감소)
+    CASE
+        WHEN 전일거래량 IS NULL OR 전일거래량 = 0 THEN NULL
+        ELSE ROUND( (거래량 - 전일거래량) * 1.0 / 전일거래량, 2)
+    END AS 거래량증가율,
+    -- 전일 대비 거래량 차이 (절대값)
+    CASE
+        WHEN 전일거래량 IS NULL THEN NULL
+        ELSE 거래량 - 전일거래량
+    END AS 거래량차이,
+    -- 거래량 신호 라벨
+    CASE
+        WHEN 전일거래량 IS NULL THEN '데이터없음'
+        WHEN 전일거래량 > 0 AND 거래량 >= 전일거래량 * 3 THEN '폭발'
+        WHEN 전일거래량 > 0 AND 거래량 >= 전일거래량 * 1.5 THEN '증가'
+        WHEN 전일거래량 > 0 AND 거래량 <= 전일거래량 * 0.7 THEN '감소'
+        ELSE '보통'
+    END AS 거래량신호
+FROM Npaystocks;
+
+
+이제 이렇게 조회 가능:
+
+SELECT *
+FROM v_stock_daily_analysis
+WHERE 날짜 = '20251118'
+ORDER BY 거래량증가율 DESC;
+
+2. “오늘 기준” 종목별 연속일수 + 거래량 분석 뷰
+🔹 v_current_streaks
+
+가장 최근 날짜(오늘) 기준으로 연속 며칠째 등장 + 오늘 거래량 분석까지 한 번에.
+
+CREATE VIEW IF NOT EXISTS v_current_streaks AS
+WITH trading_days AS (
+    SELECT DISTINCT 날짜
+    FROM Npaystocks
+    ORDER BY 날짜
+),
+numbered_days AS (
+    SELECT
+        날짜,
+        ROW_NUMBER() OVER (ORDER BY 날짜) AS day_seq
+    FROM trading_days
+),
+stock_days AS (
+    SELECT
+        n.종목명,
+        n.날짜,
+        d.day_seq,
+        ROW_NUMBER() OVER (
+            PARTITION BY n.종목명
+            ORDER BY n.날짜
+        ) AS rn
+    FROM Npaystocks n
+    JOIN numbered_days d USING (날짜)
+),
+groups AS (
+    SELECT
+        종목명,
+        날짜,
+        day_seq,
+        rn,
+        day_seq - rn AS grp
+    FROM stock_days
+),
+latest_date AS (
+    SELECT MAX(날짜) AS max_date
+    FROM Npaystocks
+),
+current_streak_group AS (
+    SELECT g.종목명, g.grp
+    FROM groups g
+    JOIN latest_date l
+      ON g.날짜 = l.max_date
+),
+streaks AS (
+    SELECT
+        g.종목명,
+        COUNT(*) AS 연속일수
+    FROM groups g
+    JOIN current_streak_group c
+      ON g.종목명 = c.종목명
+     AND g.grp     = c.grp
+    GROUP BY g.종목명
+)
+SELECT
+    s.종목명,
+    l.max_date              AS 기준날짜,
+    s.연속일수,
+    d.현재가,
+    d.전일비,
+    d.등락률,
+    d.거래량,
+    d.전일거래량,
+    d.거래량증가율,
+    d.거래량차이,
+    d.거래량신호
+FROM streaks s
+JOIN latest_date l
+JOIN v_stock_daily_analysis d
+  ON d.날짜 = l.max_date
+ AND d.종목명 = s.종목명
+ORDER BY s.연속일수 DESC, s.종목명;
+
+
+이제 이렇게 보면 됨:
+
+-- 오늘 기준 연속 상위 종목 + 거래량 상태
+SELECT *
+FROM v_current_streaks
+ORDER BY 연속일수 DESC, 등락률 DESC;
+
+
+예:
+
+연속일수 >= 3 AND 거래량신호 IN ('감소','보통')
+→ 과열 풀리면서 버티는 종목 (재돌파 후보)
+
+연속일수 >= 2 AND 거래량신호 = '폭발'
+→ 고점 경고, 단타 아니면 접근 자제
+
+3. “최근 3일 모두 등장한 종목” 뷰
+🔹 v_latest3_common
+CREATE VIEW IF NOT EXISTS v_latest3_common AS
+WITH latest3 AS (
+    SELECT DISTINCT 날짜
+    FROM Npaystocks
+    ORDER BY 날짜 DESC
+    LIMIT 3
+)
+SELECT
+    n.종목명,
+    COUNT(DISTINCT n.날짜) AS 등장일수
+FROM Npaystocks n
+WHERE n.날짜 IN (SELECT 날짜 FROM latest3)
+GROUP BY n.종목명
+HAVING COUNT(DISTINCT n.날짜) = 3
+ORDER BY n.종목명;
+
+
+사용 예:
+
+SELECT *
+FROM v_latest3_common;
+
+이렇게 쓰면 된다
+
+매일 엑셀 → INSERT 해서 Npaystocks 갱신
+
+VIEW들은 자동으로 최신 데이터 기준으로 돌아감
+
+보고 싶을 때:
+
+-- 오늘 기준 연속일수 + 거래량 분석
+SELECT *
+FROM v_current_streaks
+WHERE 연속일수 >= 3
+ORDER BY 거래량신호, 연속일수 DESC;
+
+-- 특정 날짜의 개별 종목 상태
+SELECT *
+FROM v_stock_daily_analysis
+WHERE 날짜 = '20251118' AND 종목명 = '휴림에이텍';
+
+========================================
+
+🟦 1) GitHub Pages + SQLite Viewer (완전 무료 웹페이지) — 추천 1순위
+
+SQLite DB는 서버가 필요 없어서 정적 웹사이트에서도 읽을 수 있어.
+그래서 GitHub Pages에 올려두면 웹에서 SQLite를 바로 조회 가능.
+
+✔ 필요한 것
+
+GitHub 무료 계정
+
+stock-dashboard.db 파일 하나
+
+HTML 파일 하나(내가 만들어줄 수 있음)
+
+✔ 작동 방식
+
+GitHub repository 생성
+
+stock-dashboard.db 업로드
+
+내가 만들어주는 HTML 뷰어 파일도 올림
+
+GitHub Pages 켜기
+
+웹주소 예:
+
+https://동일github이름.github.io/stock-view/
+
+
+→ 접속하면 SQLite 테이블을 직접 조회, 검색, 정렬 가능
+→ 완전 무료, 트래픽 무제한
+
+✔ 장점
+
+정말 “서버 없는 서버”
+
+돈 0원
+
+PC/스마트폰 어디서든 열림
+
+데이터 보호(비공개 repo 쓰면 됨)
+
+✔ 단점
+
+DB를 업데이트하려면 GitHub에 새 파일로 다시 업로드해야 함(자동 업로드도 가능)
+
+원하면 SQLite 웹뷰어 HTML + JS 통파일 바로 만들어줄게 → 업로드만 하면 끝.
+
+🟩 2) Google Drive + “SQLite 웹뷰어 페이지” 링크 연결 (반자동)
+
+SQLite를 Google Drive에 올려두고,
+웹뷰어 페이지는 외부(내가 만들어주는 HTML)에서 열어서
+DB를 드라이브에서 로드해서 조회 가능.
+
+장점
+
+Github 계정 없어도 됨
+
+드라이브만 있으면 됨
+
+완전 무료
+
+단점
+
+“Anyone with link” 공개 권한이 필요 → 데이터 민감하면 비추
+
+🟧 3) Streamlit Cloud (무료 웹앱으로 변환)
+
+너처럼 계속 분석할 사람에게는 이게 매우 강력함.
+
+✔ 사용 예
+
+stock-dashboard.db 랜더링
+
+SQL 쿼리 날리고 결과 테이블/그래프 표시
+
+검색, 날짜 필터링
+
+모바일 대응
+
+✔ 비용
+
+무료 티어 100% 가능
+
+DB 업로드해서 사용하면 됨
+
+✔ 동작 방식
+
+app.py라는 스크립트 하나 만듦
+
+Streamlit Cloud에 올라가면
+
+https://yourname-yourapp.streamlit.app
+
+
+이런 주소로 공개됨
+
+너는 어디서든 모바일/PC로 접속 가능
+
+원하면 Streamlit 대시보드 템플릿 바로 만들어줄게.
+그래프 포함 깔끔한 미니 웹앱으로.
+
+🟥 4) Netlify + SQLite Viewer (무료 정적 배포)
+
+GitHub Pages와 거의 동일
+차이점은 GitHub 계정 없어도 되고 ZIP 업로드도 가능
+자동 빌드 지원
+
+🟦 결론 (동일이 선택하면 됨)
+✔ 가장 간단 / 무료 / 유지관리 쉬움
+👉 GitHub Pages + SQLite Viewer
+
+→ 내가 HTML 파일 만들어주면 됨
+→ 딱 1분이면 웹서버 완성
+
+✔ 대시보드처럼 예쁘게 보고 싶으면
+👉 Streamlit Cloud(무료)
+
+→ 차트, 필터, 검색 전부 웹에서 가능
+
+🙋 동일에게 질문 (필요한 것 골라줘)
+
+GitHub Pages 방식으로 할래?
+→ SQLite 웹뷰어 HTML 파일 내가 만들어줄게 (통파일 1개)
+→ repo만 만들면 끝.
+
+Streamlit 대시보드로 하고 싶어?
+→ 멋진 웹앱 만들어줄게 (차트/검색 필터 포함)
+
+아니면 Google Drive에서 여는 방식이 더 편해?
+
+어떤 방법이 제일 마음에 들어?
+“마녀야 1번” 이런 식으로 번호만 말해도 돼.
+
+========================================
+
+연속일수 ≥ 3 + 거래량신호 = '감소' 인 종목만 뽑는 뷰를 하나 더 만들자.
+
+1️⃣ View 생성 SQL
+
+DB Browser의 SQL 실행 탭에 아래 통째로 넣고 실행해줘.
+
+CREATE VIEW IF NOT EXISTS v_candidate_streak3_volume_down AS
+SELECT
+    종목명,
+    기준날짜,
+    연속일수,
+    현재가,
+    전일비,
+    등락률,
+    거래량,
+    전일거래량,
+    거래량증가율,
+    거래량차이,
+    거래량신호
+FROM v_current_streaks
+WHERE 연속일수 >= 3
+  AND 거래량신호 = '감소'
+ORDER BY 연속일수 DESC, 등락률 DESC, 종목명;
+
+
+조건 요약
+
+연속일수 ≥ 3일
+
+오늘 거래량이 전일거래량의 70% 이하 → 거래량신호 = '감소'
+
+2️⃣ 매일 확인용 쿼리
+
+이제부터는 그냥:
+
+SELECT *
+FROM v_candidate_streak3_volume_down;
+
+
+만 실행하면,
+**“3일 이상 연속 상위에 있으면서 오늘은 거래량이 줄어든 종목”**만 딱 나오게 된다.
+
+3️⃣ 옵션 필터 예시 (원하면 추가해서 써도 됨)
+
+예를 들어 시가총액 300억 이상 + 등락률 1%~15% 같은 필터를 걸고 싶으면:
+
+SELECT *
+FROM v_candidate_streak3_volume_down
+WHERE 시가총액 >= 300
+  AND 등락률 BETWEEN 1 AND 15;
+
+
+(이건 별도 VIEW로 또 만들어줄 수도 있음)
+
+더 욕심내면
+
+“연속일수 5일 이상 + 거래량 감소 or 보통”
+
+“최근 10일 중 등장일수 TOP N”
+같은 것도 뷰로 쌓을 수 있어.
+
+이 뷰 돌려보고, 결과 스샷 한 번 보여주면 그 패턴 기준으로
+실제 매수·매도 전략까지 같이 짜 보자 😎
+
+========================================
+
+그리고 이 결과 자체가 이미 “단타/스윙에서 가장 핵심적인 신호” 중 하나야.
+
+내가 분석해서 요점만 바로 말할게.
+장황한 말 안 하고, 바로 이 결과를 어떻게 활용하면 되는지만 콕 집어준다.
+
+🔥 이 뷰에 뜨는 종목의 의미
+
+“3일 이상 연속으로 상위에 등장 + 오늘 거래량 감소”
+
+이 조합은 시장에서 흔히 말하는:
+
+👉 "눌림목 후 재돌파 대기" 패턴
+
+또는
+
+👉 "고점은 아닌데 수급 체력이 아직 남아 있는 종목"
+
+여기 속하는 종목은 크게 2가지로 나뉜다:
+
+1) “건강한 눌림목” 유형 (매수 기회)
+
+특징:
+
+연속일수가 4~8일 사이
+
+오늘 등락률이 크게 음봉이 아님
+
+거래량은 줄었지만 가격이 버티고 있음
+
+전일비가 양수거나, 눌림목이라도 시가 대비 회복
+
+이런 경우,
+👉 다음 날 또는 다다음 날 돌파(고점 갱신) 확률이 평균보다 높음.
+
+스샷에 이런 애들이 보인다:
+
+스타플렉스(7일)
+
+씨어스테크놀로지(6일)
+
+디앤디파마텍(6일)
+
+ACE 단기통안채(6일) → ETF류는 제외
+
+이뮤노시아(5일)
+
+NEW(5일)
+
+유아이디(4일)
+
+이 중에서 특히 등락률이 1~4%인데도 연속일수 높음 + 거래량 감소
+= 강한 종목인데 단타 세력이 빠진 상태
+→ 개인이 접근하기 가장 안전한 구간.
+
+2) “고점 신호” 유형 (접근 금지)
+
+특징:
+
+연속일수는 크지만 오늘 상승률이 너무 약하거나 0% 부근
+
+현재가가 고점 대비 너무 높고
+
+전일비의 갭이 커진 상태
+
+이런 애들은 다음 날 “쭉 빠졌다가 잠깐 반등” 패턴으로 끝날 가능성이 높음.
+
+지금 테이블만으로는 고점 여부까지는 판단 불가지만
+나는 이걸 판단하는 2차 필터 뷰를 바로 만들어줄 수 있어.
+
+🔥 동일이 지금 딱 해야 하는 것
+
+이번 뷰 결과는 아직 절반만 걸러진 상태야.
+실제로 유망 종목을 찾으려면 아래 조건까지 필터링하면 정확도가 훨씬 올라간다.
+
+✔ 1) 오늘 등락률이 +1% ~ +12% 구간
+
+너무 뜨겁거나(>15%) 너무 약하거나(<1%) 둘 다 제외
+
+✔ 2) 시가총액 200억~3000억 구간
+
+너무 작으면 출렁임 심함
+3천억 넘으면 상위등락 리스트 등장 자체가 드물다
+
+✔ 3) 거래량 감소율이 -0.2 ~ -0.8 구간
+
+너무 많이 빠지면(−90% 이런 건) 그냥 수급 철수
+
+✔ 4) 연속일수 3~8일
+
+10일 넘어가면 “과열구간”
+
+========================================
+
+좋아, 이제 “오늘 당장 볼 최종 후보 리스트” 만드는 뷰까지 박자 😈
+
+지금 있는 것들
+
+원본 테이블: Npaystocks
+
+연속일수 + 거래량 분석 뷰: v_current_streaks
+
+여기에 조건을 더 씌워서 최종 뷰를 하나 더 만든다:
+
+연속일수 ≥ 3일
+
+거래량신호 = 감소
+
+오늘 등락률 1% ~ 12%
+
+시가총액 300억 ~ 3,000억
+
+거래량증가율 -80% ~ -20% (전일 대비 20~80% 감소)
+
+종목명에 ETN / ETF 포함되면 제외
+
+🔧 최종 후보 뷰 생성 SQL
+
+DB Browser의 SQL 실행 탭에 이거 그대로 붙이고 실행해줘:
+
+CREATE VIEW IF NOT EXISTS v_final_candidates AS
+SELECT
+    c.종목명,
+    c.기준날짜,
+    c.연속일수,
+    c.현재가,
+    c.전일비,
+    c.등락률,
+    c.거래량,
+    c.전일거래량,
+    c.거래량증가율,
+    c.거래량차이,
+    c.거래량신호,
+    n.시가총액
+FROM v_current_streaks AS c
+JOIN Npaystocks AS n
+  ON n.날짜 = c.기준날짜
+ AND n.종목명 = c.종목명
+WHERE
+      c.연속일수 >= 3
+  AND c.거래량신호 = '감소'
+  AND c.등락률 BETWEEN 1.0 AND 12.0
+  AND c.거래량증가율 BETWEEN -0.8 AND -0.2
+  AND n.시가총액 BETWEEN 300 AND 3000
+  AND n.종목명 NOT LIKE '%ETN%'
+  AND n.종목명 NOT LIKE '%ETF%'
+ORDER BY
+    c.연속일수 DESC,
+    c.등락률 DESC,
+    c.거래량증가율 ASC,
+    c.종목명;
+
+🔍 사용할 때는 이렇게
+
+그냥:
+
+SELECT * FROM v_final_candidates;
+
+
+하면 끝.
+매일 데이터만 넣으면, 이 뷰는 자동으로 **“오늘 기준 최종 매수 후보”**만 뽑아준다.
+
+튜닝 팁
+
+너무 보수적이면
+→ 등락률 BETWEEN 0.5 AND 15 로 넓히고
+→ 시가총액 범위도 조절하면 됨.
+
+ETF/ETN 말고 레버리지/인버스도 빼고 싶으면
+WHERE에 아래 줄 추가:
+
+AND n.종목명 NOT LIKE '%레버리지%'
+AND n.종목명 NOT LIKE '%인버스%'
+
+
+한 번 돌려보고, 결과 스샷 보여주면
+그 패턴 보고 “진입 타이밍/손절 기준”까지 같이 짜보자 😎
+
+========================================
+
+
+5,670		5,700
+5,750		5,770
+5,200		5,210
+10,510		10,500
+874			868
+46,950
+3,515		3,475
+
+
+086520
+에코프로
+83,500
+30
+
+066970
+엘앤에프
+124,100
+25
+
+006400
+삼성SDI
+304,500
+13
+

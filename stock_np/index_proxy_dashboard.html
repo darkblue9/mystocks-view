@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>주식 대시보드 (고정가/현재가 분리 · 손익 자동계산)</title>
+<style>
+  :root{
+    --gap: 8px;
+    --pad: 8px;
+    --border:#e5e7eb;
+    --text:#111827;
+    --muted:#6b7280;
+    --bg:#ffffff;
+    --accent:#2563eb;
+    --danger:#ef4444;
+    --ok:#059669;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Apple SD Gothic Neo,Noto Sans KR,Malgun Gothic,sans-serif;}
+  .wrap{max-width:1200px;margin:24px auto;padding:0 12px;}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .sm{font-size:12px;color:var(--muted)}
+  .box{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#fff}
+  input[type="text"], input[type="number"]{
+    width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:8px;
+    font-size:14px;background:#fff;
+  }
+  input[readonly]{background:#f9fafb;color:#111}
+  button{
+    border:1px solid var(--border);background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;
+  }
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+  .toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+  .toggle input{transform:scale(1.1)}
+  .pill{padding:2px 8px;border:1px solid var(--border);border-radius:999px;background:#fff}
+  .table{margin-top:10px;width:100%}
+  table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+  thead th{position:sticky;top:0;background:#f8fafc;border-bottom:1px solid var(--border);padding:8px 6px;font-weight:600}
+  tbody td{border-bottom:1px solid var(--border);padding:6px}
+  td,th{text-align:center;vertical-align:middle}
+  tr:hover td{background:#fafafa}
+  .num{text-align:right}
+  .w-code{width:110px}     /* 코드 좁게 */
+  .w-name{width:170px}     /* 이름 넓게 */
+  .w-qty{width:70px}       /* 주수 좁게 */
+  .w-amt{width:120px}
+  .w-price{width:110px}
+  .nowrap{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .totals{display:flex;justify-content:flex-end;gap:12px;margin-top:12px;align-items:center}
+  .profit-pos{color:var(--ok);font-weight:700}
+  .profit-neg{color:var(--danger);font-weight:700}
+  .muted{color:var(--muted)}
+  .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .link{color:#2563eb;text-decoration:none}
+  .mini{font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="controls box">
+    <div class="row">
+      <div class="mini">프록시: <span id="apiBase" class="pill">http://localhost:3000/api</span></div>
+      <label class="toggle mini">
+        <input type="checkbox" id="liveToggle" checked>
+        <span>실시간 ON</span>
+      </label>
+      <label class="toggle mini">
+        풀링(초):
+        <input type="number" id="pollSec" value="10" min="2" step="1" style="width:68px">
+      </label>
+      <button id="addRowBtn" class="primary">+ 종목 추가</button>
+      <button id="saveBtn">저장</button>
+      <a class="link mini" href="#" id="howLink">API 규격 보기</a>
+    </div>
+    <div class="mini muted">* 데이터는 브라우저 <b>localStorage</b>에만 저장됩니다. 이름, 평단가, 주수, 고정가는 셀 클릭 후 입력 → Enter/탭(또는 포커스 아웃) 시 저장.</div>
+  </div>
+
+  <div class="table box">
+    <table id="grid">
+      <thead>
+        <tr>
+          <th class="w-code">코드</th>
+          <th class="w-name">이름</th>
+          <th class="w-price">평단가</th>
+          <th class="w-qty">주수</th>
+          <th class="w-amt">투입금액</th>
+          <th class="w-price">현재가</th>
+          <th class="w-price">고정가</th>
+          <th class="w-amt">손익(원)</th>
+          <th class="w-price">손익(%)</th>
+          <th style="width:70px">삭제</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+      </tbody>
+    </table>
+    <div class="totals">
+      <div class="mini muted">총 손익:</div>
+      <div id="totalProfit" class="profit-neg">0</div>
+    </div>
+  </div>
+</div>
+
+<!-- 도움말 모달 (간단 안내) -->
+<dialog id="helpDlg">
+  <div style="min-width:480px">
+    <h3>프록시 API 응답 규격</h3>
+    <p class="mini">GET <code>/price?code=종목코드</code> → <code>{ "code":"010620.KS", "price": 238000 }</code></p>
+    <p class="mini">여러 건: GET <code>/prices?codes=005930.KS,000660.KS</code> → <code>{ "data":[{"code":"005930.KS","price":...}, ...]}</code></p>
+    <div style="text-align:right;margin-top:10px">
+      <button id="helpClose">닫기</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+/* ===== 유틸 ===== */
+const $ = (sel, el=document) => el.querySelector(sel);
+const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+const fmt = (n) => (n ?? 0).toLocaleString('ko-KR');
+const toNum = (v) => {
+  if (v === '' || v == null) return 0;
+  if (typeof v === 'number') return v;
+  return Number(String(v).replace(/,/g,'')) || 0;
+};
+
+function calcProfit(avg, cur, fix, qty){
+  const base = (fix && !isNaN(fix) && fix !== 0) ? fix : cur;
+  if (!base || !avg) return {won:0, pct:0};
+  const won = (base - avg) * qty;
+  const pct = ((base - avg) / avg) * 100;
+  return {won, pct};
+}
+
+/* ===== 저장/로드 ===== */
+const LS_KEY = 'stock_dashboard_rows_v3';
+function loadRows(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEY)) || []; }catch{ return []; }
+}
+function saveRows(rows){
+  localStorage.setItem(LS_KEY, JSON.stringify(rows));
+}
+
+/* ===== 상태 ===== */
+let rows = loadRows();
+let timer = null;
+
+/* ===== 렌더 ===== */
+function render(){
+  const tbody = $('#tbody');
+  tbody.innerHTML = '';
+
+  rows.forEach((r, idx)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="w-code"><input class="cell code" value="${r.code||''}" /></td>
+      <td class="w-name"><input class="cell name" value="${r.name||''}" /></td>
+      <td class="w-price num"><input class="cell avg num" value="${r.avg?fmt(r.avg):''}" /></td>
+      <td class="w-qty num"><input class="cell qty num" value="${r.qty||''}" /></td>
+      <td class="w-amt num"><input class="cell invest num" value="${r.invest?fmt(r.invest):''}" readonly /></td>
+      <td class="w-price num"><input class="cell cur num" value="${r.cur?fmt(r.cur):''}" ${($('#liveToggle').checked?'readonly':'')} /></td>
+      <td class="w-price num"><input class="cell fix num" value="${r.fix?fmt(r.fix):''}" /></td>
+      <td class="w-amt num"><span class="profit-won">0</span></td>
+      <td class="w-price num"><span class="profit-pct">0</span></td>
+      <td><button class="danger del">삭제</button></td>
+    `;
+    tbody.appendChild(tr);
+
+    // 이벤트
+    tr.querySelector('.del').addEventListener('click', ()=>{
+      rows.splice(idx,1); saveRows(rows); render();
+    });
+    $$('input.cell', tr).forEach(inp=>{
+      inp.addEventListener('blur', ()=>applyRowEdit(idx, tr));
+      inp.addEventListener('keydown', (e)=>{
+        if(e.key==='Enter') { e.preventDefault(); inp.blur(); }
+      });
+    });
+  });
+
+  updateProfits();
+}
+
+/* ===== 입력 반영 ===== */
+function applyRowEdit(i, tr){
+  const r = rows[i];
+  const gv = (sel)=>tr.querySelector(sel)?.value ?? '';
+  r.code = gv('.code').trim();
+  r.name = gv('.name').trim();
+  r.avg  = toNum(gv('.avg'));
+  r.qty  = toNum(gv('.qty'));
+  r.cur  = toNum(gv('.cur'));
+  r.fix  = toNum(gv('.fix'));
+  r.invest = Math.round((r.avg||0) * (r.qty||0));
+  tr.querySelector('.invest').value = r.invest ? fmt(r.invest) : '';
+  saveRows(rows);
+  updateProfits();
+}
+
+/* ===== 손익/합계 갱신 ===== */
+function updateProfits(){
+  let total = 0;
+  $$('#tbody tr').forEach((tr, i)=>{
+    const r = rows[i];
+    const {won, pct} = calcProfit(r.avg, r.cur, r.fix, r.qty);
+    total += won;
+    tr.querySelector('.profit-won').textContent = fmt(Math.round(won));
+    tr.querySelector('.profit-pct').textContent = (isFinite(pct)? pct.toFixed(2):'0.00') + '%';
+    tr.querySelector('.profit-won').className = 'profit-won ' + (won>=0?'profit-pos':'profit-neg');
+  });
+  const tEl = $('#totalProfit');
+  tEl.textContent = fmt(Math.round(total));
+  tEl.className = total>=0 ? 'profit-pos' : 'profit-neg';
+}
+
+/* ===== 실시간 가격 폴링 ===== */
+async function fetchPrices(codes){
+  const base = $('#apiBase').textContent.trim();
+  const q = encodeURIComponent(codes.join(','));
+  const url = `${base}/prices?codes=${q}`;
+  try{
+    const res = await fetch(url, {cache:'no-store'});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const j = await res.json();
+    // 기대형식: { data: [{code:"xxx", price:123}, ...] }
+    (j.data||[]).forEach(p=>{
+      const idx = rows.findIndex(r=>r.code === p.code);
+      if(idx>=0){ rows[idx].cur = Number(p.price)||rows[idx].cur||0; }
+    });
+    saveRows(rows);
+    // 화면 반영
+    $$('#tbody tr').forEach((tr,i)=>{
+      tr.querySelector('.cur').value = rows[i].cur ? fmt(rows[i].cur) : '';
+      tr.querySelector('.invest').value = rows[i].invest ? fmt(rows[i].invest) : '';
+    });
+    updateProfits();
+  }catch(err){
+    console.error('가격 조회 실패:', err);
+  }
+}
+
+function tick(){
+  if(!$('#liveToggle').checked) return;
+  const codes = rows.map(r=>r.code).filter(Boolean);
+  if(codes.length===0) return;
+  fetchPrices(codes);
+}
+
+function startPolling(){
+  stopPolling();
+  if(!$('#liveToggle').checked) return;
+  const sec = Math.max(2, Number($('#pollSec').value)||10);
+  timer = setInterval(tick, sec*1000);
+  tick(); // 즉시 1회
+}
+function stopPolling(){
+  if(timer){ clearInterval(timer); timer = null; }
+}
+
+/* ===== 초기 버튼/동작 ===== */
+$('#addRowBtn').addEventListener('click', ()=>{
+  rows.push({code:'', name:'', avg:0, qty:0, invest:0, cur:0, fix:0});
+  saveRows(rows);
+  render();
+});
+$('#saveBtn').addEventListener('click', ()=>{ saveRows(rows); updateProfits(); alert('저장되었습니다.'); });
+$('#liveToggle').addEventListener('change', ()=>{
+  // 현재가 셀 readOnly 토글
+  $$('#tbody .cur').forEach(inp=> inp.readOnly = $('#liveToggle').checked);
+  if($('#liveToggle').checked) startPolling(); else stopPolling();
+});
+$('#pollSec').addEventListener('change', ()=>startPolling());
+
+$('#howLink').addEventListener('click', (e)=>{
+  e.preventDefault(); $('#helpDlg').showModal();
+});
+$('#helpClose').addEventListener('click', ()=>$('#helpDlg').close());
+
+// 첫 랜더
+if(rows.length===0){
+  // 샘플 두 줄
+  rows = [
+    {code:'010620.KS', name:'삼성전자', avg:238000, qty:5, invest:238000*5, cur:0, fix:0},
+    {code:'015760.KS', name:'한국전력', avg:43150, qty:51, invest:43150*51, cur:0, fix:0},
+  ];
+  saveRows(rows);
+}
+render();
+startPolling();
+</script>
+</body>
+</html>

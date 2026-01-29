@@ -1,0 +1,33 @@
+name: Stock Data Scraper
+
+on:
+  schedule:
+    - cron: '20 5 * * 1-5' # 평일 오후 2시 20분 (UTC 05:20)
+    - cron: '40 6 * * 1-5'  # 평일 오후 3시 40분 (UTC 06:40)
+
+jobs:
+  scrape-and-save:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 저장소 코드 가져오기
+      uses: actions/checkout@v3
+
+    - name: 파이썬 세팅
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 라이브러리 설치
+      run: |
+        pip install -r requirements.txt
+
+    - name: 스크립트 실행
+      # ▼▼▼▼▼ [여기가 핵심!] 이 부분이 빠졌거나 들여쓰기가 틀렸을 거야 ▼▼▼▼▼
+      env:
+        TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
+        TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+      run: |
+        python daily_scrap.py
+        #python db_test.py

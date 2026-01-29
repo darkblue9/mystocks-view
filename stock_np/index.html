@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>간단 포트 감시 (자동 감지 v1.2 · 한글/영문명)</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto; background:#f7f7f8; color:#111; margin:0;}
+    .wrap{max-width:1100px; margin:24px auto; padding:0 16px;}
+    .card{background:#fff; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.06); padding:16px;}
+    h1{font-size:20px; margin:0 0 8px}
+    table{width:100%; border-collapse:collapse; font-size:14px}
+    th,td{padding:10px; border-bottom:1px solid #eee; vertical-align:top;}
+    th{text-align:left; color:#666}
+    input,button{font:inherit}
+    input[type=text],input[type=number]{border:1px solid #ccc; border-radius:8px; padding:6px 8px;}
+    .right{text-align:right}
+    .muted{color:#666; font-size:12px}
+    .pos{color:#087443; font-weight:600}
+    .neg{color:#c11a3a; font-weight:600}
+    .row-tools{white-space:nowrap}
+    .controls{display:flex; gap:12px; flex-wrap:wrap}
+    .controls > div{display:flex; flex-direction:column; gap:4px}
+    .pill{border-radius:999px; padding:6px 10px; border:1px solid #ddd; background:#fafafa}
+    .symcell{display:flex; flex-direction:column; gap:6px}
+    .symname{font-size:12px; color:#444}
+    .name-ko{font-weight:600}
+    .name-en{opacity:.9}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="controls" style="margin-bottom:12px">
+    <div>
+      <label class="muted">Finnhub API Key</label>
+      <input id="apiKey" placeholder="finnhub.io에서 발급한 API 키" style="width:300px" />
+    </div>
+    <div>
+      <label class="muted">폴링(초) · 최소 5</label>
+      <input id="pollSec" type="number" min="5" value="15" style="width:100px" />
+    </div>
+    <div style="align-self:end; display:flex; gap:8px">
+      <button id="toggleBtn" class="pill">실시간 ON</button>
+      <button id="addBtn" class="pill">+ 종목 추가</button>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-bottom:8px">
+    입력 팁: <b>6자리 코드만</b> 입력해도 <b>.KS/.KQ 자동 감지</b> + <b>한글/영문 종목명</b> 자동 표시. (예: 005930 → 005930.KS → 삼성전자 / Samsung Electronics)
+  </div>
+
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px">
+      <div class="muted">임계치: +30,000원 / -10,000원 도달 시 알림</div>
+      <div><b>총 손익: <span id="totalPnl">0</span>원</b></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:280px">종목(코드/심볼)</th>
+          <th>투입금액(원)</th>
+          <th>주수</th>
+          <th>평단가</th>
+          <th>현재가</th>
+          <th>손익(원)</th>
+          <th>손익(%)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+      <tfoot>
+        <tr><td colspan="8" class="muted">* 데이터는 로컬에만 저장(localStorage). 새로고침해도 유지.</td></tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+
+<script>
+  // ===== 유틸 =====
+  const $ = (s)=>document.querySelector(s);
+  const krw = (n)=> (Number(n)||0).toLocaleString('ko-KR',{maximumFractionDigits:0});
+  const load = (k, v=null)=>{try{const s=localStorage.getItem(k); return s?JSON.parse(s):v;}catch{return v}};
+  const save = (k, v)=> localStorage.setItem(k, JSON.stringify(v));
+  const isKorean = (s)=> /[\u3131-\uD7A3]/.test(String(s||''));
+
+  const DEFAULT_ROWS = [
+    { symbol: '005930.KS', code: '005930', name_ko: '삼성전자', name_en: 'Samsung Electronics', amount: 1000000, shares: 10 },
+    { symbol: '005380.KS', code: '005380', name_ko: '현대차', name_en: 'Hyundai Motor', amount: 800000, shares: 4 },
+  ];
+
+  // ===== 상태 =====
+  let apiKey = load('finnhub_api_key','');
+  let pollSec = load('poll_sec', 15);
+  let rows = load('positions', DEFAULT_ROWS);
+  let running = true;
+  let timer = null;
+  const notified = {}; // {symbol: 'up'|'down'}
+
+  $('#apiKey').value = apiKey;
+  $('#pollSec').value = pollSec;
+
+  // 알림 권한 요청(최초 1회)
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  // ===== 심볼/이름 자동 감지 =====
+  let typingTimer = 0;
+  document.addEventListener('input', (e)=>{
+    const t = e.target;
+    if (t.dataset && t.dataset.idx !== undefined){
+      const idx = Number(t.dataset.idx);
+      const key = t.dataset.key;
+      if (key === 'symbolOrCode') {
+        const raw = t.value.trim();
+        rows[idx].__raw = raw;
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(async ()=>{
+          const resolved = await resolveSymbolAndNames(raw);
+          if (resolved) {
+            rows[idx].symbol = resolved.symbol;
+            rows[idx].code = resolved.code || raw;
+            rows[idx].name_ko = resolved.name_ko || '';
+            rows[idx].name_en = resolved.name_en || '';
+          } else {
+            rows[idx].symbol = raw;
+            rows[idx].code = raw;
+            rows[idx].name_ko = '';
+            rows[idx].name_en = '';
+          }
+          save('positions', rows); render(); fetchQuotes();
+        }, 400);
+      } else if (key === 'amount' || key === 'shares') {
+        rows[idx][key] = Number(t.value);
+        save('positions', rows); render();
+      }
+    }
+  });
+
+  async function resolveSymbolAndNames(input){
+    if (!input) return null;
+    if (/\.(KS|KQ)$/i.test(input)) {
+      const prof = await fetchProfile(input);
+      const desc = await searchDescFallback(input);
+      const { name_ko, name_en } = pickKoEn(prof?.name, desc);
+      return { symbol: input.toUpperCase(), name_ko, name_en, code: input.slice(0,6) };
+    }
+    if (/^\d{6}$/.test(input)) {
+      const found = await searchKR(input);
+      if (found) return found;
+    }
+    const found = await searchKR(input);
+    if (found) return found;
+    return null;
+  }
+
+  function pickKoEn(primary, secondary){
+    let ko='', en='';
+    if (isKorean(primary)) ko = primary; else en = primary||'';
+    if (isKorean(secondary)) ko = ko||secondary; else en = en||secondary||'';
+    return { name_ko: ko, name_en: en };
+  }
+
+  async function searchDescFallback(symbol){
+    if (!apiKey) return '';
+    try{
+      const q = symbol.replace(/\.(KS|KQ)$/i,''); // e.g., 005930
+      const url = `https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url);
+      if(!res.ok) return '';
+      const j = await res.json();
+      const it = (j.result||[]).find(r=> (r.symbol||'').toUpperCase() === symbol.toUpperCase());
+      return it ? (it.description||'') : '';
+    }catch{ return ''; }
+  }
+
+  async function searchKR(q){
+    if (!apiKey) return null;
+    try{
+      const url = `https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url);
+      if(!res.ok) return null;
+      const j = await res.json();
+      const items = (j.result||[]).filter(it=>/\.K[SQ]$/i.test(it.symbol||''));
+      if (items.length===0) return null;
+      const code = (/^\d{6}$/.test(q)? q : null);
+      let pick = null;
+      if (code){
+        pick = items.find(it => (it.symbol||'').startsWith(code)) || null;
+      }
+      if (!pick) pick = items[0];
+      const prof = await fetchProfile(pick.symbol);
+      const { name_ko, name_en } = pickKoEn(prof?.name, pick.description);
+      return { symbol: pick.symbol.toUpperCase(), name_ko, name_en, code: (pick.symbol||'').slice(0,6) };
+    }catch(e){ console.error(e); return null; }
+  }
+
+  async function fetchProfile(symbol){
+    if (!apiKey) return null;
+    try{
+      const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url);
+      if(!res.ok) return null;
+      const j = await res.json();
+      return j||null;
+    }catch(e){ console.error(e); return null; }
+  }
+
+  function render(){
+    const tbody = $('#tbody');
+    tbody.innerHTML = '';
+
+    let total = 0;
+    rows.forEach((r, idx)=>{
+      const q = quotes[r.symbol]?.c || 0;
+      const avg = (Number(r.amount||0) / Number(r.shares||1)) || 0;
+      const curVal = q * Number(r.shares||0);
+      const pnl = curVal - Number(r.amount||0);
+      total += pnl;
+      const pct = avg? ((q-avg)/avg*100):0;
+
+      const tr = document.createElement('tr');
+      const showSymbol = r.symbol || r.__raw || '';
+      const ko = r.name_ko ? r.name_ko : '';
+      const en = r.name_en ? r.name_en : '';
+      const names = (ko || en) ? `<span class="name-ko">${ko}</span> / <span class="name-en">${en}</span>` : '';
+      tr.innerHTML = `
+        <td class="symcell">
+          <input data-idx="${idx}" data-key="symbolOrCode" value="${showSymbol}" placeholder="예: 005930 또는 005930.KS" />
+          <div class="symname">${names}</div>
+        </td>
+        <td class="right"><input data-idx="${idx}" data-key="amount" type="number" value="${r.amount||0}" style="width:120px"/></td>
+        <td class="right"><input data-idx="${idx}" data-key="shares" type="number" value="${r.shares||0}" style="width:100px"/></td>
+        <td class="right">${avg? krw(avg): '-'}</td>
+        <td class="right">${q? krw(q): '-'}</td>
+        <td class="right ${pnl>0?'pos':pnl<0?'neg':''}">${krw(pnl)}</td>
+        <td class="right ${pct>0?'pos':pct<0?'neg':''}">${avg? pct.toFixed(2)+'%':'-'}</td>
+        <td class="row-tools right"><button data-del="${idx}" class="pill">삭제</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    $('#totalPnl').textContent = krw(total);
+  }
+
+  // 삭제 버튼(위임)
+  document.addEventListener('click', (e)=>{
+    const del = e.target.getAttribute('data-del');
+    if (del !== null){
+      rows.splice(Number(del),1);
+      save('positions', rows); render();
+    }
+  });
+
+  // 상단 컨트롤
+  $('#addBtn').onclick = ()=>{ rows.push({symbol:'', code:'', name_ko:'', name_en:'', amount:0, shares:0}); save('positions', rows); render(); };
+  $('#toggleBtn').onclick = ()=>{ running = !running; $('#toggleBtn').textContent = running? '실시간 ON':'일시정지'; if(running){kick()} else {clearInterval(timer);} };
+  $('#apiKey').onchange = (e)=>{ apiKey = e.target.value; save('finnhub_api_key', apiKey); };
+  $('#pollSec').onchange = (e)=>{ let v = Number(e.target.value)||15; v = Math.max(5,v); pollSec=v; save('poll_sec', pollSec); if(running){kick()} };
+
+  // 시세 가져오기
+  let quotes = {}; // {sym:{c:현재가,...}}
+  async function fetchQuotes(){
+    if(!apiKey) return;
+    const syms = rows.map(r=>r.symbol).filter(Boolean);
+    if(syms.length===0) return;
+
+    try{
+      const results = await Promise.all(syms.map(async (sym)=>{
+        const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${encodeURIComponent(apiKey)}`;
+        const res = await fetch(url);
+        if(!res.ok) throw new Error(sym+': http '+res.status);
+        const j = await res.json();
+        return [sym, j];
+      }));
+      quotes = Object.fromEntries(results);
+      checkNotify();
+      render();
+    }catch(err){
+      console.error(err);
+    }
+  }
+
+  function checkNotify(){
+    rows.forEach(r=>{
+      if(!r.symbol) return;
+      const q = quotes[r.symbol];
+      if(!q || !q.c) return;
+      const pnl = q.c * Number(r.shares||0) - Number(r.amount||0);
+      const key = r.symbol;
+      const state = notified[key];
+      if (pnl >= 30000 && state !== 'up') {
+        notify(`[상승] ${r.symbol}`, `손익 +${krw(pnl)}원, 현재가 ${krw(q.c)}원`);
+        notified[key] = 'up';
+      } else if (pnl <= -10000 && state !== 'down') {
+        notify(`[하락] ${r.symbol}`, `손익 ${krw(pnl)}원, 현재가 ${krw(q.c)}원`);
+        notified[key] = 'down';
+      }
+      if (pnl < 30000 && pnl > -10000) notified[key] = undefined;
+    });
+  }
+
+  function notify(title, body){
+    if(!('Notification' in window)) return;
+    if(Notification.permission==='granted') new Notification(title, { body });
+  }
+
+  function kick(){
+    clearInterval(timer);
+    fetchQuotes();
+    timer = setInterval(fetchQuotes, Math.max(5, Number(pollSec))*1000);
+  }
+
+  render();
+  kick();
+</script>
+</body>
+</html>

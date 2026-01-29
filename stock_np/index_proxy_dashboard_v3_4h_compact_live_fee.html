@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>index_proxy_dashboard_v3_4h_compact_live (fee 0.26%)</title>
+<style>
+:root{--fg:#111;--muted:#666;--bg:#fafafa;--line:#e5e7eb;--red:#c62828;--green:#2e7d32}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.25 system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',Arial}
+.wrap{max-width:1280px;margin:14px auto;padding:0 12px}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+input[type=text],input[type=number],select{border:1px solid var(--line);border-radius:6px;padding:6px 8px;background:#fff}
+.btn{border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:#fff;cursor:pointer}
+.btn:hover{background:#f6f6f6}
+.status{font-size:12px;color:#0a7a27}
+table{width:100%;border-collapse:collapse;background:#fff}
+th,td{border-bottom:1px solid var(--line);padding:8px}
+th{background:#fff;position:sticky;top:0;z-index:1}
+td input{width:100%;box-sizing:border-box}
+.right{text-align:right}
+.red{color:var(--red)} .green{color:var(--green)} .muted{color:var(--muted)}
+tfoot td{font-weight:700}
+.small *{font-size:12px} .small td{padding:6px} .small th{padding:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toolbar">
+    <label>프록시 주소 <input type="text" id="proxy" value="http://localhost:3000"></label>
+    <label>엔드포인트
+      <select id="endpoint">
+        <option value="/api/quote">자동 감지</option>
+        <option value="/api/quote">/api/quote</option>
+      </select>
+    </label>
+    <label>코드 파라미터명
+      <select id="codeParam"><option value="symbols" selected>code</option><option value="symbols">symbols</option></select>
+    </label>
+    <label>가격 키 경로(JSON) <input type="text" id="priceKey" value="c"></label>
+    <label>폴링(초) <input type="number" id="poll" value="10" min="5" step="1" style="width:70px"></label>
+    <label><input type="checkbox" id="live" checked> 실시간 ON</label>
+    <button class="btn" id="add">+ 종목 추가</button>
+    <button class="btn" id="save">저장</button>
+    <button class="btn" id="test">현재가 테스트</button>
+    <span class="status" id="status">상태: OK</span>
+  </div>
+
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th style="width:120px">코드</th>
+        <th>이름</th>
+        <th class="right" style="width:120px">평단가</th>
+        <th class="right" style="width:80px">주수</th>
+        <th class="right" style="width:140px">투입금액</th>
+        <th class="right" style="width:120px">현재가</th>
+        <th class="right" style="width:120px">고정가</th>
+        <th class="right" style="width:140px">손익(원)</th>
+        <th class="right" style="width:100px">손익(%)</th>
+        <th style="width:70px">삭제</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+    <tfoot>
+      <tr>
+        <td colspan="7" class="right">총 손익:</td>
+        <td class="right" id="sum" colspan="2">0</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+  <div class="muted" style="margin-top:8px">※ 손익에는 수수료 <b>0.26%</b> (매수 0.015% + 매도 0.015% + 거래세 0.23%)가 반영됩니다.</div>
+</div>
+
+<script>
+const $=sel=>document.querySelector(sel);const $$=sel=>Array.from(document.querySelectorAll(sel));
+const fmt=n=>new Intl.NumberFormat('ko-KR').format(+n||0);
+const ensure=(s)=>{s=(s||'').trim().toUpperCase();if(!s)return'';if(/^\d{6}$/.test(s))return s+'.KS';return s;}
+const get=(o,p)=>p.split('.').reduce((a,k)=> (a||{})[k], o);
+
+// 수수료(고정): 매수 0.015% + 매도 0.015% + 거래세 0.23%
+const FEE_BUY=0.00015, FEE_SELL=0.00015, FEE_TAX=0.0023;
+
+let rows=JSON.parse(localStorage.getItem('v34_rows')||'[]');
+if(!rows.length) rows=[{code:'000660.KS', name:'SK하이닉스', avg:597000, qty:4, fix:''}];
+let timer=null;
+
+function saveAll(){
+  localStorage.setItem('v34_rows', JSON.stringify(rows));
+  localStorage.setItem('v34_cfg', JSON.stringify({
+    proxy:$('#proxy').value, endpoint:$('#endpoint').value,
+    codeParam:$('#codeParam').value, priceKey:$('#priceKey').value,
+    poll:$('#poll').value, live:$('#live').checked
+  }));
+}
+
+function loadCfg(){
+  const cfg=JSON.parse(localStorage.getItem('v34_cfg')||'{}');
+  if(cfg.proxy) $('#proxy').value=cfg.proxy;
+  if(cfg.endpoint) $('#endpoint').value=cfg.endpoint;
+  if(cfg.codeParam) $('#codeParam').value=cfg.codeParam;
+  if(cfg.priceKey) $('#priceKey').value=cfg.priceKey;
+  if(cfg.poll) $('#poll').value=cfg.poll;
+  if(typeof cfg.live==='boolean') $('#live').checked=cfg.live;
+}
+
+function rowEl(r,i){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input type="text" value="${r.code||''}" data-k="code"></td>
+    <td><input type="text" value="${r.name||''}" data-k="name"></td>
+    <td class="right"><input type="number" value="${r.avg||''}" data-k="avg"></td>
+    <td class="right"><input type="number" value="${r.qty||''}" data-k="qty"></td>
+    <td class="right" data-k="invest">-</td>
+    <td class="right" data-k="cur">-</td>
+    <td class="right"><input type="number" value="${r.fix??''}" data-k="fix" placeholder=""></td>
+    <td class="right" data-k="pnl">-</td>
+    <td class="right" data-k="pnlp">-</td>
+    <td><button class="btn del">삭제</button></td>`;
+
+  tr.addEventListener('change',e=>{
+    const k=e.target.dataset.k; if(!k) return;
+    let v=e.target.value;
+    if(k==='code') v=ensure(v);
+    if(k==='avg' || k==='qty' || k==='fix') v=(v===''? '' : Number(v));
+    rows[i][k]=v; saveAll(); drawCalc();
+  });
+  tr.querySelector('.del').onclick=()=>{ rows.splice(i,1); saveAll(); draw(); };
+  return tr;
+}
+
+function draw(){
+  const tb=$('#rows'); tb.innerHTML='';
+  rows.forEach((r,i)=> tb.appendChild(rowEl(r,i)) );
+  drawCalc();
+}
+
+function drawCalc(quotes={}){
+  let sum=0;
+  rows.forEach((r,i)=>{
+    const tr=$$('#rows tr')[i];
+    const avg=Number(r.avg)||0, qty=Number(r.qty)||0;
+    const invest=avg*qty;
+    tr.querySelector('[data-k=invest]').textContent=fmt(invest);
+
+    const live = get(quotes[r.code]||{}, $('#priceKey').value) || 0;
+    const cur = (r.fix!=='' && r.fix!=null) ? Number(r.fix) : live;
+    tr.querySelector('[data-k=cur]').textContent=cur?fmt(cur):'-';
+
+    // ---- 수수료/세금 반영 손익 ----
+    const buyVal=invest;
+    const sellVal=cur*qty;
+    const feeBuy=buyVal*FEE_BUY;
+    const feeSell=sellVal*FEE_SELL;
+    const feeTax=sellVal*FEE_TAX;
+    const fees=feeBuy+feeSell+feeTax;
+
+    const pnl = (sellVal - buyVal) - fees;
+    const pnlp = invest ? (pnl/invest*100) : 0;
+
+    const pnlEl = tr.querySelector('[data-k=pnl]');
+    const pnppEl = tr.querySelector('[data-k=pnlp]');
+    pnlEl.textContent = (pnl>=0?'+':'')+fmt(pnl);
+    pnlEl.className = 'right ' + (pnl>=0?'green':'red');
+    pnppEl.textContent = isFinite(pnlp)? pnlp.toFixed(2)+'%':'-';
+    pnppEl.className = 'right ' + (pnl>=0?'green':'red');
+
+    sum += pnl;
+  });
+  $('#sum').textContent=fmt(sum);
+  $('#sum').className = 'right ' + (sum>=0?'green':'red');
+}
+
+async function fetchQuotes(){
+  try{
+    const base=$('#proxy').value.replace(/\/+$/,''); const ep=$('#endpoint').value;
+    const q=rows.map(r=>ensure(r.code)).filter(Boolean); if(!q.length){drawCalc({}); return;}
+    const url = `${base}${ep}?${$('#codeParam').value}=${encodeURIComponent(q.join(','))}`;
+    const res = await fetch(url);
+    if(!res.ok){ $('#status').textContent='상태: 오류'; $('#status').style.color='#b00020'; return; }
+    const j = await res.json();
+    $('#status').textContent='상태: OK'; $('#status').style.color=''; 
+    rows.forEach(r=>{const qobj=j[r.code]; if(!qobj) return; if(!r.name && qobj.name) r.name=qobj.name;});
+    saveAll();
+    drawCalc(j);
+  }catch(e){
+    $('#status').textContent='상태: 네트워크 오류'; $('#status').style.color='#b00020';
+  }
+}
+
+function kick(){
+  if(timer) clearInterval(timer);
+  if(!$('#live').checked) return;
+  fetchQuotes();
+  timer = setInterval(fetchQuotes, Math.max(5, Number($('#poll').value)||10)*1000);
+}
+
+// events
+$('#add').onclick=()=>{ rows.push({code:'',name:'',avg:0,qty:0,fix:''}); saveAll(); draw(); };
+$('#save').onclick=saveAll;
+$('#test').onclick=fetchQuotes;
+$('#poll').onchange=$('#live').onchange=$('#proxy').onchange=$('#endpoint').onchange=$('#codeParam').onchange=$('#priceKey').onchange=()=>{saveAll(); kick();};
+
+// init
+loadCfg(); draw(); kick();
+</script>
+</body>
+</html>

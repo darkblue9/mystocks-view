@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>주식 대시보드 v3.4h (삭제 확인 · 목표가 알림)</title>
+<style>
+body{font-family:sans-serif;margin:10px;font-size:12px}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+th,td{border:1px solid #ccc;padding:2px;text-align:center}
+input,select,button{font:inherit;font-size:12px}
+td input{width:55%;text-align:right}
+td input[readonly]{background:#f9f9f9}
+.status{font-size:11px}
+.profit-pos{color:green}
+.profit-neg{color:red}
+.actions{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;justify-content:center}
+.mv{display:inline-flex;gap:2px}
+.mv button,.del{width:18px;height:18px;font-size:10px;padding:0;margin:0}
+.del{width:auto;padding:0 6px;height:20px;font-size:11px}
+@keyframes blink { from {background:#fff8cc} to {background:#ffffff} }
+.blink { animation: blink 0.8s step-end infinite; }
+.shrink input{width:38%}
+col.c-code{width:9%}col.c-name{width:13%}col.c-buy{width:9%}col.c-qty{width:5%}
+col.c-invest{width:11%}col.c-target{width:8%}col.c-cur{width:9%}col.c-sell{width:9%}
+col.c-pwon{width:8%}col.c-pct{width:6%}col.c-act{width:7%}
+</style>
+</head>
+<body>
+<table id="grid">
+  <colgroup>
+    <col class="c-code"><col class="c-name"><col class="c-buy"><col class="c-qty">
+    <col class="c-invest"><col class="c-target"><col class="c-cur"><col class="c-sell">
+    <col class="c-pwon"><col class="c-pct"><col class="c-act">
+  </colgroup>
+  <thead><tr>
+    <th>코드</th><th>이름</th><th>매수가</th><th>주수</th><th>투입금액</th>
+    <th>목표가</th><th>현재가</th><th>매도가</th><th>손익(원)</th><th>손익(%)</th><th>▲▼/삭제</th>
+  </tr></thead>
+  <tbody id="tbody"></tbody>
+</table>
+<script>
+const $=(s,el=document)=>el.querySelector(s);
+let rows=[{code:'000660',name:'SK하이닉스',avg:586000,qty:4,cur:544000,target:551000}];
+function render(){
+  const tb=$('#tbody');tb.innerHTML='';
+  rows.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td><input class="code" value="${r.code}"></td>
+      <td><input class="name" value="${r.name}"></td>
+      <td><input class="avg" value="${r.avg}"></td>
+      <td><input class="qty" value="${r.qty}"></td>
+      <td><input class="inv" readonly></td>
+      <td><input class="target" value="${r.target}"></td>
+      <td><input class="cur" value="${r.cur}"></td>
+      <td><input class="fix"></td>
+      <td><span class="pw">0</span></td>
+      <td><span class="pp">0%</span></td>
+      <td><span class="actions">
+        <span class="mv"><button class="up">▲</button><button class="down">▼</button></span>
+        <button class="del">삭제</button></span></td>`;
+    tb.appendChild(tr);
+    tr.querySelector('.del').onclick=()=>{ 
+      if(confirm('정말 삭제하시겠습니까?')){
+        rows.splice(i,1);
+        render();
+      }
+    };
+  });
+}
+render();
+</script>
+</body>
+</html>

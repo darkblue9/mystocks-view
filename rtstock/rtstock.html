@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>8종목 실시간 실선 차트 (네이버 JSON)</title>
+<meta http-equiv="Cache-Control" content="no-store" />
+<style>
+  :root { --bg:#0f1115; --card:#0b0e13; --bd:#1f2430; --fg:#e8ecf2; --sub:#9aa3af; }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:600 14px/1.2 system-ui,"Noto Sans KR",sans-serif}
+  .grid{display:grid;gap:8px;padding:8px;grid-template-columns:repeat(4,1fr);grid-auto-rows:300px}
+  .tile{background:var(--card);border:1px solid var(--bd);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .head{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--bd)}
+  .sym{font-weight:700}
+  .sub{font-weight:500;color:var(--sub);margin-left:6px}
+  .price{font-weight:700}
+  .chart{flex:1;position:relative}
+  .small{position:absolute;right:8px;bottom:6px;font-size:12px;color:var(--sub)}
+  .err{color:#ff8686;font-weight:700;position:absolute;left:10px;top:8px}
+</style>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+
+<script>
+/* ===== 설정 ===== */
+const TICKERS = [
+  {name:"삼성전자", code:"005930"},
+  {name:"SK하이닉스", code:"000660"},
+  {name:"네이버",     code:"035420"},
+  {name:"LG화학",     code:"051910"},
+  {name:"삼성SDI",    code:"006400"},
+  {name:"셀트리온",   code:"068270"},
+  {name:"현대차",     code:"005380"},
+  {name:"카카오",     code:"035720"},
+];
+const RANGE   = "1m";       // 1d, 5d, 1m, 3m, 6m, 1y ...
+const REFRESH = 60000;      // 60초마다 갱신
+const API     = "http://127.0.0.1:5001/series/"; // 위 프록시
+/* =========== */
+
+const grid = document.getElementById("grid");
+const charts = {}, series = {};
+
+function addTile(t){
+  const tile = document.createElement("div");
+  tile.className = "tile";
+  tile.innerHTML = `
+    <div class="head">
+      <div><span class="sym">${t.name}</span> <span class="sub">(${t.code})</span></div>
+      <div><span class="price" id="p-${t.code}">-</span></div>
+    </div>
+    <div class="chart" id="c-${t.code}">
+      <div class="small">라인차트 · ${RANGE}</div>
+    </div>`;
+  grid.appendChild(tile);
+
+  const c = LightweightCharts.createChart(document.getElementById(`c-${t.code}`), {
+    layout: { background: { color: 'transparent' }, textColor: '#c9d1d9' },
+    grid: { vertLines: { color: '#22272e' }, horzLines: { color: '#22272e' } },
+    rightPriceScale: { borderVisible: false },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+  const l = c.addLineSeries({ lineWidth: 2, color: '#4aa3ff' }); // ★ 실선만
+  charts[t.code] = c; series[t.code] = l;
+}
+
+async function loadOne(code){
+  const el = document.getElementById(`c-${code}`);
+  try{
+    const r = await fetch(`${API}${code}?range=${RANGE}`);
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.error || "load fail");
+
+    if(j.price != null){
+      const pEl = document.getElementById(`p-${code}`);
+      pEl.textContent = Number(j.price).toLocaleString("ko-KR");
+    }
+    series[code].setData(j.data || []);
+    charts[code].timeScale().fitContent();
+  }catch(e){
+    el.innerHTML = `<div class="err">로딩 실패: ${code}</div>`;
+    console.error(code, e);
+  }
+}
+
+(async function init(){
+  TICKERS.forEach(addTile);
+  for(const t of TICKERS) await loadOne(t.code);
+  setInterval(()=> TICKERS.forEach(t => loadOne(t.code)), REFRESH);
+})();
+</script>
+</body>
+</html>

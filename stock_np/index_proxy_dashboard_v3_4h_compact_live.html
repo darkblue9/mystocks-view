@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>주식 대시보드 v3.4h (Compact + Live + .KS 자동)</title>
+<style>
+  body{margin:0;padding:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Malgun Gothic,sans-serif}
+  .top{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+  label{font-size:12px;color:#555;display:flex;flex-direction:column;gap:4px}
+  input, select, button{font:inherit}
+  input[type="text"], input[type="number"]{width:100%;box-sizing:border-box}
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  th,td{border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:center}
+  th{background:#f8fafc}
+  td input{width:100%;border:1px solid #ddd;padding:2px 3px}
+  td input[readonly]{background:#f9fafb}
+  td.num input, td.num span{text-align:right}
+  .status{font-size:12px;padding:2px 6px;border-radius:4px;background:#ecfdf5;color:#065f46}
+  .bad{background:#fef2f2;color:#991b1b}
+  .profit-pos{color:#059669;font-weight:700}
+  .profit-neg{color:#ef4444;font-weight:700}
+  .mini{font-size:12px;color:#555}
+  .tot{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+  /* compact fixed widths */
+  th:nth-child(1){width:90px}
+  th:nth-child(2){width:110px}
+  th:nth-child(3),th:nth-child(4),th:nth-child(5),th:nth-child(6),th:nth-child(7),th:nth-child(8),th:nth-child(9){width:95px}
+  th:nth-child(10){width:60px}
+</style>
+</head>
+<body>
+<div class="top">
+  <label>프록시 주소
+    <input id="apiBase" type="text" placeholder="http://localhost:3000">
+  </label>
+  <label>엔드포인트
+    <select id="apiMode">
+      <option value="auto">자동 감지</option>
+      <option value="multi">멀티</option>
+      <option value="single">단건</option>
+    </select>
+  </label>
+  <label>코드 파라미터명
+    <input id="codeParam" type="text" value="code">
+  </label>
+  <label>가격 키 경로(JSON)
+    <input id="priceKey" type="text" value="price" placeholder="예: data.price">
+  </label>
+  <label>풀링(초)
+    <input id="pollSec" type="number" min="2" step="1" value="10">
+  </label>
+  <label><input type="checkbox" id="liveToggle" checked> 실시간 ON</label>
+  <button id="addRowBtn">+ 종목 추가</button>
+  <button id="saveBtn">저장</button>
+  <button id="testBtn">현재가 테스트</button>
+  <span id="status" class="status">상태: 대기</span>
+  <details>
+    <summary class="mini">엔드포인트 템플릿</summary>
+    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+      <label style="flex:1">멀티 템플릿
+        <input id="multiTpl" type="text" value="/api/prices?codes={codes}">
+      </label>
+      <label style="flex:1">단건 템플릿
+        <input id="singleTpl" type="text" value="/api/price?{codeParam}={code}">
+      </label>
+    </div>
+  </details>
+</div>
+
+<table id="grid">
+  <thead>
+    <tr>
+      <th>코드</th>
+      <th>이름</th>
+      <th>평단가</th>
+      <th>주수</th>
+      <th>투입금액</th>
+      <th>현재가</th>
+      <th>고정가</th>
+      <th>손익(원)</th>
+      <th>손익(%)</th>
+      <th>삭제</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+<div class="tot">
+  <span class="mini">총 손익:</span>
+  <span id="totalProfit" class="profit-neg">0</span>
+</div>
+
+<script>
+const $ = (s,el=document)=>el.querySelector(s);
+const $$ = (s,el=document)=>Array.from(el.querySelectorAll(s));
+const fmt = (n)=> (n??0).toLocaleString('ko-KR');
+const toNum = (v)=>{ if(v===''||v==null) return 0; if(typeof v==='number') return v; return Number(String(v).replace(/,/g,''))||0; };
+const getByPath = (obj, path)=>{ if(!path) return undefined; const parts = String(path).split('.'); let cur = obj; for(const p of parts){ if(cur==null) return undefined; cur = cur[p]; } return cur; };
+const calcProfit = (avg, cur, fix, qty)=>{ const base = (fix && !isNaN(fix) && fix!==0) ? fix : cur; if(!avg || !qty || !base) return {won:0, pct:0}; const won = (base-avg)*qty; const pct = ((base-avg)/avg)*100; return {won, pct}; };
+
+const KEY_V3='stock_dashboard_rows_compact_live_v3';
+const KEY_SETTINGS='stock_dashboard_settings_compact_live_v3';
+function loadSettings(){ try { return JSON.parse(localStorage.getItem(KEY_SETTINGS)) || {}; } catch { return {}; } }
+function saveSettings(s){ localStorage.setItem(KEY_SETTINGS, JSON.stringify(s)); }
+function loadRows(){ try{ return JSON.parse(localStorage.getItem(KEY_V3)) || []; }catch{return []} }
+function saveRows(r){ localStorage.setItem(KEY_V3, JSON.stringify(r)); }
+
+let rows = loadRows();
+let timer=null;
+let settings = Object.assign({
+  apiBase:'http://localhost:3000',
+  apiMode:'auto',
+  codeParam:'code',
+  priceKey:'price',
+  multiTpl:'/api/prices?codes={codes}',
+  singleTpl:'/api/price?{codeParam}={code}'
+}, loadSettings());
+
+// init controls
+$('#apiBase').value = settings.apiBase||'';
+$('#apiMode').value = settings.apiMode||'auto';
+$('#codeParam').value = settings.codeParam||'code';
+$('#priceKey').value = settings.priceKey||'price';
+$('#multiTpl').value = settings.multiTpl||'/api/prices?codes={codes}';
+$('#singleTpl').value = settings.singleTpl||'/api/price?{codeParam}={code}';
+
+function normalizeCode(code){
+  let c = (code||'').trim().toUpperCase();
+  if(!c) return c;
+  // if 6-digit numeric without suffix, append .KS
+  if(/^\d{6}$/.test(c)) c = c + '.KS';
+  // allow KQ/KS suffix
+  return c;
+}
+
+function render(){
+  const tb = $('#tbody'); tb.innerHTML='';
+  rows.forEach(r=>{ r.invest = Math.round((r.avg||0)*(r.qty||0)); });
+  rows.forEach((r,idx)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input class="code" value="${r.code||''}"></td>
+      <td><input class="name" value="${r.name||''}"></td>
+      <td class="num"><input class="avg" value="${r.avg?fmt(r.avg):''}"></td>
+      <td class="num"><input class="qty" value="${r.qty||''}"></td>
+      <td class="num"><input class="invest" readonly value="${r.invest?fmt(r.invest):'0'}"></td>
+      <td class="num"><input class="cur" ${($('#liveToggle').checked?'readonly':'')} value="${r.cur?fmt(r.cur):''}"></td>
+      <td class="num"><input class="fix" value="${r.fix?fmt(r.fix):''}"></td>
+      <td class="num"><span class="profit-won">0</span></td>
+      <td class="num"><span class="profit-pct">0.00%</span></td>
+      <td><button class="del">삭제</button></td>
+    `;
+    tb.appendChild(tr);
+    tr.querySelector('.del').addEventListener('click',()=>{ rows.splice(idx,1); saveRows(rows); render(); });
+    $$('input',tr).forEach(inp=>{
+      inp.addEventListener('input',()=>applyRowEdit(idx,tr,true));
+      inp.addEventListener('blur',()=>applyRowEdit(idx,tr,false));
+      inp.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();inp.blur();}});
+    });
+  });
+  updateProfits();
+}
+
+function applyRowEdit(i, tr, live){
+  const r = rows[i];
+  const get = (sel)=> tr.querySelector(sel)?.value ?? '';
+  r.code = get('.code').trim();
+  r.name = get('.name').trim();
+  r.avg = toNum(get('.avg'));
+  r.qty = toNum(get('.qty'));
+  r.cur = toNum(get('.cur'));
+  r.fix = toNum(get('.fix'));
+  r.invest = Math.round((r.avg||0)*(r.qty||0));
+  tr.querySelector('.invest').value = fmt(r.invest||0);
+  if(!live){ tr.querySelector('.avg').value = r.avg?fmt(r.avg):''; tr.querySelector('.qty').value = r.qty?String(r.qty):''; tr.querySelector('.cur').value = r.cur?fmt(r.cur):''; tr.querySelector('.fix').value = r.fix?fmt(r.fix):''; }
+  saveRows(rows);
+  updateProfits();
+}
+
+function updateProfits(){
+  let total=0;
+  $$('#tbody tr').forEach((tr,i)=>{
+    const r = rows[i];
+    const {won,pct} = calcProfit(r.avg,r.cur,r.fix,r.qty);
+    total += won;
+    const w = tr.querySelector('.profit-won');
+    w.textContent = fmt(Math.round(won));
+    w.className = 'profit-won ' + (won>=0?'profit-pos':'profit-neg');
+    const p = tr.querySelector('.profit-pct');
+    p.textContent = (isFinite(pct)?pct.toFixed(2):'0.00')+'%';
+  });
+  const t=$('#totalProfit');
+  t.textContent = fmt(Math.round(total));
+  t.className = (total>=0)?'profit-pos':'profit-neg';
+}
+
+function setStatus(text, ok){
+  const s = $('#status');
+  s.textContent = '상태: ' + text;
+  s.className = 'status ' + (ok?'':'bad');
+}
+function persistSettings(){
+  saveSettings({
+    apiBase:$('#apiBase').value.trim(),
+    apiMode:$('#apiMode').value,
+    codeParam:$('#codeParam').value.trim(),
+    priceKey:$('#priceKey').value.trim(),
+    multiTpl:$('#multiTpl').value.trim(),
+    singleTpl:$('#singleTpl').value.trim()
+  });
+}
+
+// URL builders
+function buildUrlSingle(code){
+  const base = ($('#apiBase').value||'').trim().replace(/\/$/,'');
+  const codeParam = ($('#codeParam').value||'code').trim();
+  const tpl = ($('#singleTpl').value||'/api/price?{codeParam}={code}').trim();
+  const path = tpl.replace('{code}', encodeURIComponent(code))
+                  .replace('{codeParam}', encodeURIComponent(codeParam));
+  return base + path;
+}
+function buildUrlMulti(codes){
+  const base = ($('#apiBase').value||'').trim().replace(/\/$/,'');
+  const tpl = ($('#multiTpl').value||'/api/prices?codes={codes}').trim();
+  const path = tpl.replace('{codes}', encodeURIComponent(codes.join(',')));
+  return base + path;
+}
+
+// fetching
+async function fetchPricesAuto(codes){
+  const mode = $('#apiMode').value;
+  try{
+    if(mode==='multi'){ await fetchPricesMulti(codes); }
+    else if(mode==='single'){ await fetchPricesSingle(codes); }
+    else{ await fetchPricesMulti(codes).catch(()=>fetchPricesSingle(codes)); }
+    setStatus('OK', true);
+  }catch(err){ setStatus('오류 - 가격 조회 실패', false); console.warn(err); }
+}
+async function fetchPricesMulti(codes){
+  persistSettings();
+  const url = buildUrlMulti(codes.map(normalizeCode));
+  const res = await fetch(url,{cache:'no-store'});
+  if(!res.ok) throw new Error('HTTP '+res.status+' @ '+url);
+  const j = await res.json();
+  const priceKey = ($('#priceKey').value||'price').trim();
+  const codeParam = ($('#codeParam').value||'code').trim();
+  const arr = Array.isArray(j) ? j : (j.data || j.results || []);
+  arr.forEach(p=>{
+    const code = String(p[codeParam] || p.code || p.symbol || p.ticker || '').toUpperCase();
+    const price = Number(getByPath(p, priceKey)) || Number(p.price) || Number(p.last) || 0;
+    const idx = rows.findIndex(r=> normalizeCode(r.code) === code);
+    if(idx>=0){ rows[idx].cur = price || rows[idx].cur || 0; }
+  });
+  saveRows(rows);
+  $$('#tbody tr').forEach((tr,i)=> tr.querySelector('.cur').value = rows[i].cur?fmt(rows[i].cur):'');
+  updateProfits();
+}
+async function fetchPricesSingle(codes){
+  persistSettings();
+  const priceKey = ($('#priceKey').value||'price').trim();
+  const results = await Promise.allSettled(codes.map(async code=>{
+    const url = buildUrlSingle(normalizeCode(code));
+    const res = await fetch(url,{cache:'no-store'});
+    if(!res.ok) throw new Error('HTTP '+res.status+' @ '+url);
+    const j = await res.json();
+    const price = Number(getByPath(j, priceKey)) || Number(j.price) || Number(j.last) || Number(j.data?.price) || 0;
+    return {code: normalizeCode(code), price};
+  }));
+  results.forEach(r=>{ if(r.status==='fulfilled'){ const {code, price} = r.value; const idx = rows.findIndex(x=> normalizeCode(x.code)===code); if(idx>=0){ rows[idx].cur = price || rows[idx].cur || 0; } } });
+  saveRows(rows);
+  $$('#tbody tr').forEach((tr,i)=> tr.querySelector('.cur').value = rows[i].cur?fmt(rows[i].cur):'');
+  updateProfits();
+}
+
+function tick(){
+  if(!$('#liveToggle').checked) return;
+  const codes = rows.map(r=>r.code).filter(Boolean);
+  if(!codes.length) return;
+  fetchPricesAuto(codes);
+}
+function startPolling(){
+  stopPolling();
+  if(!$('#liveToggle').checked) return;
+  const sec = Math.max(2, Number($('#pollSec').value)||10);
+  timer = setInterval(tick, sec*1000);
+  tick();
+}
+function stopPolling(){ if(timer){clearInterval(timer); timer=null;} }
+
+// events
+$('#addRowBtn').addEventListener('click',()=>{rows.push({code:'',name:'',avg:0,qty:0,cur:0,fix:0,invest:0});saveRows(rows);render();});
+$('#saveBtn').addEventListener('click',()=>{persistSettings();saveRows(rows);alert('저장되었습니다.');});
+$('#testBtn').addEventListener('click',async ()=>{
+  const c = rows.map(r=>r.code).filter(Boolean);
+  if(!c.length){ alert('코드를 한 줄 이상 입력하세요.'); return; }
+  await fetchPricesAuto([c[0]]); // 첫 종목 테스트
+});
+$('#liveToggle').addEventListener('change',()=>{ $$('#tbody .cur').forEach(inp=> inp.readOnly = $('#liveToggle').checked); if($('#liveToggle').checked) startPolling(); else stopPolling(); });
+$('#pollSec').addEventListener('change', startPolling);
+['apiBase','apiMode','codeParam','priceKey','multiTpl','singleTpl'].forEach(id=> $('#'+id).addEventListener('change', persistSettings));
+
+// seed
+if(!rows.length){
+  rows=[
+    {code:'000660.KS',name:'SK하이닉스',avg:597000,qty:4,cur:0,fix:0,invest:597000*4},
+    {code:'009830',name:'한화솔루션',avg:33500,qty:80,cur:0,fix:0,invest:33500*80},
+    {code:'204270',name:'제이앤티씨',avg:29300,qty:133,cur:0,fix:0,invest:29300*133},
+    {code:'100090',name:'SK오션플랜트',avg:22250,qty:115,cur:0,fix:0,invest:22250*115},
+    {code:'064350',name:'현대로템',avg:231500,qty:11,cur:0,fix:0,invest:231500*11}
+  ];
+  saveRows(rows);
+}
+render();
+startPolling();
+</script>
+</body>
+</html>

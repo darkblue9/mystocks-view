@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>간단 포트 감시 (v1.4-proxy · 디버그)</title>
+  <style>
+    :root{ --fs:12px; --pad:6px; --ip:4px; }
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto; background:#fafafa; color:#111; margin:0; font-size:var(--fs);}
+    .wrap{max-width:1200px; margin:12px auto; padding:0 8px;}
+    .card{background:#fff; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.05); padding:10px;}
+    .banner{background:#fff3cd; border:1px solid #ffe49b; color:#6b5e00; padding:8px 10px; border-radius:10px; margin-bottom:8px; display:none}
+    .ok{background:#e7f7e8; border-color:#b7e0bb; color:#0d5e17}
+    table{width:100%; border-collapse:collapse; font-size:inherit}
+    th,td{padding:var(--pad); border-bottom:1px solid #eee; vertical-align:middle;}
+    th{text-align:left; color:#666; font-weight:600}
+    input,button{font:inherit}
+    input[type=text],input[type=number]{border:1px solid #ccc; border-radius:8px; padding:var(--ip) 6px; background:#fff;}
+    input[readonly]{background:#f5f5f5; color:#555}
+    .right{text-align:right}
+    .muted{color:#666; font-size:11px}
+    .pos{color:#087443; font-weight:600}
+    .neg{color:#c11a3a; font-weight:600}
+    .row-tools{white-space:nowrap; display:flex; gap:4px; align-items:center; justify-content:flex-end}
+    .controls{display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-bottom:8px}
+    .controls > div{display:flex; flex-direction:column; gap:4px}
+    .pill{border-radius:999px; padding:4px 10px; border:1px solid #ddd; background:#f6f6f6; cursor:pointer}
+    .symcell{display:flex; flex-direction:column; gap:4px; min-width:240px}
+    .symname{font-size:11px; color:#333; line-height:1.2; cursor:pointer}
+    .symname.placeholder{color:#999}
+    .name-editor{display:none; gap:6px}
+    .name-editor input{width:46%; min-width:120px}
+    .dense .controls{gap:6px}
+    .dense th, .dense td{padding:4px 6px}
+    .dense input[type=text], .dense input[type=number]{padding:3px 5px}
+    .topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:6px}
+    .top-actions{display:flex; gap:6px; align-items:center}
+    .switch{display:inline-flex; gap:6px; align-items:center; font-size:11px}
+    #rowsInfo{font-size:11px; color:#555}
+    .tiny{font-size:10px; opacity:.8}
+    .tag{display:inline-block; border:1px solid #bbb; border-radius:999px; padding:0 6px; font-size:10px; margin-left:6px; color:#444}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div id="warn" class="banner"></div>
+
+  <div class="controls">
+    <div>
+      <label class="muted">Finnhub API Key (프록시 사용 시 브라우저에 필요 없음)</label>
+      <input id="apiKey" placeholder="프록시 미사용 시에만 필요" style="width:360px" />
+    </div>
+    <div>
+      <label class="muted">폴링(초) · 최소 5</label>
+      <input id="pollSec" type="number" min="5" value="10" style="width:80px" />
+    </div>
+    <div class="top-actions">
+      <button id="toggleBtn" class="pill">실시간 ON</button>
+      <button id="addBtn" class="pill">+ 종목 추가</button>
+      <label class="switch"><input id="denseChk" type="checkbox" checked /> 밀집 모드</label>
+      <button id="testBtn" class="pill">프록시 테스트</button>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-bottom:6px">
+    기본 모드는 <b>프록시 서버 http://localhost:3000/api</b> 입니다. 프록시가 죽어있으면 경고가 뜨고, API 키가 있으면 직접(Finnhub) 모드로 자동 전환합니다.
+    <span id="rowsInfo"></span>
+  </div>
+
+  <div class="card dense" id="card">
+    <div class="topbar">
+      <div class="muted">임계치: +30,000원 / -10,000원 도달 시 알림</div>
+      <div><b>총 손익: <span id="totalPnl">0</span>원</b></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:320px">종목(코드/심볼 · 이름)</th>
+          <th>매수가(원)</th>
+          <th>주수</th>
+          <th>투입금액</th>
+          <th>현재가/고정가</th>
+          <th>손익(원)</th>
+          <th>손익(%)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+      <tfoot>
+        <tr><td colspan="8" class="muted">* 데이터는 로컬에만 저장. · 고정가 입력 시 해당 행은 실시간 대신 고정가로 손익 계산.</td></tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+
+<script>
+  const USE_PROXY_DEFAULT = true;
+  const PROXY_BASE = 'http://localhost:3000/api';
+
+  const $ = (s)=>document.querySelector(s);
+  const krw = (n)=> (Number(n)||0).toLocaleString('ko-KR',{maximumFractionDigits:0});
+  const load = (k, v=null)=>{try{const s=localStorage.getItem(k); return s?JSON.parse(s):v;}catch{return v}};
+  const save = (k, v)=> localStorage.setItem(k, JSON.stringify(v));
+
+  let apiKey = load('finnhub_api_key','');
+  let pollSec = load('poll_sec', 10);
+  let rows = load('positions_v14', [
+    { symbol: '005930.KS', code: '005930', name_ko: '삼성전자', name_en: 'Samsung Electronics', buy: 70000, shares: 10, fixed: null }
+  ]);
+  let running = true;
+  let timer = null;
+  let quotes = {};
+  let mode = 'proxy'; // 'proxy' | 'direct'
+  const notified = {};
+
+  $('#apiKey').value = apiKey;
+  $('#pollSec').value = pollSec;
+  $('#denseChk').checked = true;
+
+  function showWarn(msg, ok=false){
+    const el = $('#warn');
+    el.classList.toggle('ok', ok);
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+  function hideWarn(){ const el=$('#warn'); el.style.display='none'; }
+
+  async function pingProxy(){
+    try{
+      const r = await fetch(PROXY_BASE + '/quote?symbols=005930.KS', { cache:'no-store' });
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const j = await r.json();
+      const ok = j && j['005930.KS'] && typeof j['005930.KS'].c !== 'undefined';
+      if (ok){ showWarn('프록시 연결 OK (http://localhost:3000). 현재 모드: 프록시', true); return true; }
+      throw new Error('응답 형식 아님');
+    }catch(e){
+      showWarn('프록시 연결 실패: '+e.message+' → Finnhub 직접 모드로 전환하려면 상단에 API Key 입력', false);
+      return false;
+    }
+  }
+
+  $('#testBtn').onclick = async ()=>{ await pingProxy(); };
+
+  $('#denseChk').onchange = (e)=>{
+    const card = $('#card');
+    if (e.target.checked) card.classList.add('dense'); else card.classList.remove('dense');
+  };
+
+  $('#apiKey').onchange = (e)=>{ apiKey = e.target.value; save('finnhub_api_key', apiKey); };
+
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  function amountOf(r){ return Math.round(Number(r.buy||0) * Number(r.shares||0)); }
+  function effectivePrice(r){
+    if (r.fixed && Number(r.fixed)>0) return Number(r.fixed);
+    const q = quotes[r.symbol]?.c || 0;
+    return q;
+  }
+
+  async function fetchQuotes(){
+    const syms = rows.map(r=>r.symbol).filter(Boolean);
+    if (syms.length===0) return;
+    try{
+      let ok = false;
+      if (mode==='proxy'){
+        const url = PROXY_BASE + '/quote?symbols=' + encodeURIComponent(syms.join(','));
+        const res = await fetch(url, { cache:'no-store' });
+        if (!res.ok) throw new Error('proxy '+res.status);
+        const j = await res.json();
+        quotes = j || {};
+        ok = true;
+      } else {
+        if (!apiKey) throw new Error('API Key 필요');
+        const arr = await Promise.all(syms.map(async (sym)=>{
+          const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${encodeURIComponent(apiKey)}`);
+          if(!res.ok) throw new Error(sym+': http '+res.status);
+          return [sym, await res.json()];
+        }));
+        quotes = Object.fromEntries(arr);
+        ok = true;
+      }
+      hideWarn();
+      if (!ok) throw new Error('no mode');
+    }catch(e){
+      if (mode==='proxy'){
+        const canDirect = apiKey && apiKey.length>10;
+        showWarn('프록시 실패 → '+(canDirect?'직접 모드로 전환합니다.':'API Key 없어서 전환 불가'), false);
+        if (canDirect){ mode='direct'; }
+      } else {
+        showWarn('직접 모드 실패: '+e.message, false);
+      }
+    }
+    render();
+  }
+
+  function render(){
+    const tbody = $('#tbody');
+    tbody.innerHTML = '';
+    let total = 0;
+
+    rows.forEach((r, idx)=>{
+      const avg = Number(r.buy||0);
+      const amt = amountOf(r);
+      const cur = effectivePrice(r);
+      const curVal = cur * Number(r.shares||0);
+      const pnl = curVal - amt;
+      total += pnl;
+      const pct = avg? ((cur-avg)/avg*100):0;
+      const fixedTag = (r.fixed && Number(r.fixed)>0) ? `<span class="tag">고정</span>` : '';
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="symcell">
+          <input data-idx="${idx}" data-key="symbolOrCode" value="${r.symbol||''}" placeholder="예: 005930.KS" />
+          <div class="symname">${(r.name_ko||'') + (r.name_en? ' / '+r.name_en:'')}</div>
+        </td>
+        <td class="right"><input data-idx="${idx}" data-key="buy" type="number" value="${r.buy||0}" style="width:100px"/></td>
+        <td class="right"><input data-idx="${idx}" data-key="shares" type="number" value="${r.shares||0}" style="width:70px"/></td>
+        <td class="right"><input value="${krw(amt)}" readonly style="width:110px"/></td>
+        <td class="right">
+          <div style="display:flex; gap:4px; align-items:center; justify-content:flex-end">
+            <input data-idx="${idx}" data-key="fixed" type="number" placeholder="${cur?krw(cur):''}" value="${(r.fixed||'')}" style="width:90px"/>
+            ${fixedTag}
+          </div>
+          <div class="muted right">${cur? '시세: '+krw(cur): '-'}</div>
+        </td>
+        <td class="right ${pnl>0?'pos':pnl<0?'neg':''}">${krw(pnl)}</td>
+        <td class="right ${pct>0?'pos':pct<0?'neg':''}">${avg? pct.toFixed(2)+'%':'-'}</td>
+        <td class="row-tools right">
+          <button class="pill tiny" data-move="up" data-idx="${idx}">▲</button>
+          <button class="pill tiny" data-move="down" data-idx="${idx}">▼</button>
+          <button class="pill" data-del="${idx}">삭제</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    $('#totalPnl').textContent = krw(total);
+  }
+
+  // events
+  document.addEventListener('input', (e)=>{
+    const t = e.target;
+    if (t.dataset && t.dataset.idx !== undefined){
+      const idx = Number(t.dataset.idx);
+      const key = t.dataset.key;
+      if (key === 'buy' || key === 'shares') {
+        rows[idx][key] = Number(t.value)||0;
+      } else if (key === 'fixed') {
+        const v = String(t.value).trim();
+        rows[idx].fixed = v==='' ? null : Number(v)||null;
+      } else if (key === 'symbolOrCode') {
+        rows[idx].symbol = String(t.value).trim();
+      }
+      save('positions_v14', rows);
+      render();
+    }
+  });
+  document.addEventListener('click', (e)=>{
+    const mv = e.target.getAttribute('data-move');
+    const del = e.target.getAttribute('data-del');
+    if (mv){
+      const idx = Number(e.target.getAttribute('data-idx'));
+      if (mv==='up' && idx>0){ [rows[idx-1], rows[idx]] = [rows[idx], rows[idx-1]]; }
+      if (mv==='down' && idx<rows.length-1){ [rows[idx+1], rows[idx]] = [rows[idx], rows[idx+1]]; }
+      save('positions_v14', rows); render();
+    }
+    if (del !== null){ rows.splice(Number(del),1); save('positions_v14', rows); render(); }
+  });
+
+  // init
+  (async ()=>{
+    render();
+    const ok = await pingProxy();
+    mode = ok? 'proxy' : (apiKey? 'direct':'proxy');
+    setInterval(fetchQuotes, 7000);
+    fetchQuotes();
+  })();
+</script>
+</body>
+</html>
