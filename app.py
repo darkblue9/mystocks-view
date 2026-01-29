@@ -4,10 +4,10 @@ import requests
 import json
 
 # 1. 화면 세팅
-st.set_page_config(page_title="주식 분석 지도", page_icon="📈", layout="wide")
+st.set_page_config(page_title="동일의 주식 보물지도", page_icon="📈", layout="wide")
 
-st.title("📈 주식 분석 지도")
-st.markdown("Run by **Turso DB** & **Streamlit**")
+st.title("📈 동일의 주식 보물지도 (Pro Ver.)")
+st.markdown("Run by **Turso DB** & **Streamlit** | Data: **OHLC + 수급(외인/기관)**")
 
 # 2. Turso HTTP API 통신 함수
 def query_turso(sql_query):
@@ -32,10 +32,8 @@ def query_turso(sql_query):
         if response.status_code == 200:
             result = response.json()
             try:
-                # 결과가 비어있을 때 처리
                 if not result['results'][0]['response']['result']: 
                      return pd.DataFrame()
-                     
                 res_data = result['results'][0]['response']['result']
                 cols = [c['name'] for c in res_data['cols']]
                 rows = []
@@ -53,160 +51,124 @@ def query_turso(sql_query):
         else:
             st.error(f"통신 에러: {response.text}")
             return pd.DataFrame()
-            
     except Exception as e:
         st.error(f"함수 에러: {e}")
         return pd.DataFrame()
 
 # ---------------------------------------------------------
-# [수정됨] 쿼리 저장소: indate 컬럼 추가
+# [핵심] 쿼리 저장소 (수급 데이터 반영)
 # ---------------------------------------------------------
 
-# 공통: indate(입력시간) 추가
-view_sql = """
-WITH v_stocks_plus AS (
-    SELECT 
-        indate,  -- [추가] 입력 시간
-        날짜, 구분, 종목명, 현재가, 전일비, 
-        ROUND(등락률/100.0, 4) as 등락률, 
-        거래량, 전일거래량, 시가총액, 상장주식수 
-    FROM Npaystocks 
-    WHERE 등락률 > 0
+# 공통 CTE: 오늘 날짜 기준 데이터만 필터링 (최신 데이터)
+base_cte = """
+WITH latest_data AS (
+    SELECT * FROM Npaystocks 
+    WHERE 날짜 = (SELECT MAX(날짜) FROM Npaystocks)
 )
 """
 
-tab1, tab2, tab3 = st.tabs(["🔥 돈 냄새 (급등주)", "🤫 개미 털기 (스윙)", "🔍 테이블 확인"])
+tab1, tab2, tab3, tab4 = st.tabs(["🐋 쌍끌이 매집 (수급)", "🔥 돈 냄새 (급등)", "🤫 개미 털기 (스윙)", "🔍 데이터 확인"])
 
+# ---------------------------------------------------------
+# 탭 1: 쌍끌이 매집 (Foreigner + Institution Buy)
+# ---------------------------------------------------------
 with tab1:
-    st.header("🔥 돈 냄새가 진동하는 놈들")
-    st.caption("조건: 거래량 3배 폭발 + 3~15% 상승 + 중형주")
+    st.header("🐋 세력 형님들이 같이 사는 종목 (양매수)")
+    st.caption("조건: 외국인과 기관이 동시에 순매수 + 주가 상승")
     
-    # [수정] SELECT 맨 앞에 indate 추가
-    sql_money = view_sql + """
+    sql_whale = base_cte + """
     SELECT 
-        indate AS 수집시간,  -- [추가]
-        날짜, 종목명, 현재가, 
-        ROUND(등락률 * 100, 2) || '%' AS 등락률,
-        ROUND(거래량 * 1.0 / 전일거래량 * 100, 1) || '%' AS 거래량급증률,
-        ROUND(거래량 * 1.0 / 상장주식수 * 100, 1) || '%' AS 거래회전율, 
-        ROUND((현재가 * 거래량) / 100000000.0, 1) || '억' AS 거래대금,
-        ROUND(시가총액 / 10000.0, 1) || '조' AS 시가총액_조단위
-    FROM v_stocks_plus
-    WHERE 날짜 = (SELECT MAX(날짜) FROM Npaystocks)
-      AND 전일거래량 > 0
-      AND 거래량 >= 전일거래량 * 3          
-      AND 등락률 BETWEEN 0.03 AND 0.15      
-      AND 시가총액 BETWEEN 1000 AND 50000   
-      AND (현재가 * 거래량) >= 5000000000   
-      
-      -- 필터링
-      AND 종목명 NOT LIKE '%KODEX%' 
-      AND 종목명 NOT LIKE '%TIGER%' 
-      AND 종목명 NOT LIKE '%ETN%' 
-      AND 종목명 NOT LIKE '%스팩%' 
-      AND 종목명 NOT LIKE '%우'
-      AND 종목명 NOT LIKE 'RISE%'
-      AND 종목명 NOT LIKE 'KoAct%'
-      AND 종목명 NOT LIKE 'TIMEFOLIO%'
-      AND 종목명 NOT LIKE 'SOL%'
-      AND 종목명 NOT LIKE 'ACE%'
-      AND 종목명 NOT LIKE 'HANARO%'
-    ORDER BY 거래회전율 DESC, 거래량급증률 DESC;
+        종목명, 현재가, 
+        ROUND(등락률, 2) || '%' AS 등락률,
+        거래량,
+        외국인순매수, 기관순매수, 개인순매수,
+        업종명,
+        indate AS 수집시간
+    FROM latest_data
+    WHERE 외국인순매수 > 0 
+      AND 기관순매수 > 0
+      AND 등락률 > 0
+    ORDER BY (외국인순매수 + 기관순매수) DESC
+    LIMIT 30
     """
     
-    if st.button("돈 냄새 맡기", key="btn_money"):
-        with st.spinner('데이터 분석 중...'):
-            df = query_turso(sql_money)
-            if not df.empty:
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            else:
-                st.warning("조건에 맞는 종목이 없습니다.")
+    if st.button("쌍끌이 포착", key="btn_whale"):
+        df = query_turso(sql_whale)
+        if not df.empty:
+            # 보기 좋게 포맷팅 (천 단위 콤마)
+            # 주의: 데이터가 문자열로 올 수 있어서 처리
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("오늘 쌍끌이 매수 종목이 없거나 데이터가 아직 수집되지 않았어.")
 
+# ---------------------------------------------------------
+# 탭 2: 돈 냄새 (Volume Spike)
+# ---------------------------------------------------------
 with tab2:
-    st.header("🤫 개미 털고 조용히 가는 놈들")
-    st.caption("조건: 3일 연속 상승 + 거래량은 오히려 감소 (매집 의심)")
+    st.header("🔥 돈 냄새가 진동하는 놈들")
+    st.caption("조건: 거래량 폭발 + 외국인 매수 개입")
     
-    # [수정] SELECT 및 내부 쿼리에 indate 전달
-    sql_quiet = """
-    WITH v_stocks_plus AS (
-        SELECT 
-            indate, -- [추가]
-            날짜, 구분, 종목명, 현재가, 전일비, 
-            ROUND(등락률/100.0, 4) as 등락률, 
-            거래량, 전일거래량, 시가총액, 상장주식수 
-        FROM Npaystocks 
-        WHERE 등락률 > 0
-    ),
-    trading_days AS (
-        SELECT DISTINCT 날짜 FROM v_stocks_plus ORDER BY 날짜
-    ),
-    numbered_days AS (
-        SELECT 날짜, ROW_NUMBER() OVER (ORDER BY 날짜) AS day_seq
-        FROM trading_days
-    ),
-    stock_days AS (
-        SELECT n.종목명, n.날짜, d.day_seq,
-            ROW_NUMBER() OVER (PARTITION BY n.종목명 ORDER BY n.날짜) AS rn
-        FROM v_stocks_plus n JOIN numbered_days d USING (날짜)
-    ),
-    groups AS (
-        SELECT 종목명, 날짜, day_seq, rn, day_seq - rn AS grp
-        FROM stock_days
-    ),
-    latest_date AS (
-        SELECT MAX(날짜) AS max_date FROM v_stocks_plus
-    ),
-    current_streak_group AS (
-        SELECT g.종목명, g.grp
-        FROM groups g JOIN latest_date l ON g.날짜 = l.max_date
-    ),
-    streaks AS (
-        SELECT g.종목명, COUNT(*) AS 연속일수 
-        FROM groups g
-        JOIN current_streak_group c ON g.종목명 = c.종목명 AND g.grp = c.grp
-        GROUP BY g.종목명
-    )
+    sql_money = base_cte + """
     SELECT 
-        d.indate AS 수집시간, -- [추가] 최종 출력,
-          d.날짜,
-        s.종목명, 
-        s.연속일수, 
-        d.현재가, 
-        ROUND(d.등락률 * 100, 2) || '%' AS 등락률,
-        d.거래량, 
-        d.전일거래량,
-        ROUND(d.거래량증가율 * 100, 1) || '%' AS 거래량증가율,
-        CASE 
-            WHEN d.거래량 < d.전일거래량 THEN '매집의심(감소)'
-            ELSE '보통'
-        END AS 신호
-    FROM streaks s 
-    JOIN latest_date l
-    JOIN (
-        SELECT 
-            indate, -- [추가] 내부 전달
-            날짜, 종목명, 현재가, 전일비, 등락률, 거래량, 전일거래량, 시가총액,
-            CASE WHEN 전일거래량 IS NULL OR 전일거래량 = 0 THEN 0 ELSE (거래량 - 전일거래량) * 1.0 / 전일거래량 END AS 거래량증가율
-        FROM v_stocks_plus
-    ) d ON d.날짜 = l.max_date AND d.종목명 = s.종목명
-    WHERE s.연속일수 >= 3
-      AND d.거래량 < d.전일거래량
-      AND d.시가총액 BETWEEN 300 AND 3000
-      AND d.등락률 BETWEEN 0.01 AND 0.12
-      AND d.거래량증가율 BETWEEN -0.8 AND -0.2
-    ORDER BY s.연속일수 DESC, d.등락률 DESC;
+        종목명, 현재가, 
+        ROUND(등락률, 2) || '%' AS 등락률,
+        거래량, 전일거래량,
+        ROUND((거래량 - 전일거래량)*100.0/전일거래량, 1) || '%' AS 거래량급증,
+        외국인순매수, 
+        (현재가 * 거래량) / 100000000 AS 거래대금_억,
+        업종명
+    FROM latest_data
+    WHERE 거래량 >= 전일거래량 * 3
+      AND 전일거래량 > 0
+      AND 등락률 >= 3
+      AND 외국인순매수 > 0  -- 외국인이 냄새 맡고 온 것만
+    ORDER BY 등락률 DESC
+    LIMIT 30
     """
     
-    if st.button("조용한 놈들 찾기", key="btn_quiet"):
-        with st.spinner('세력 발자국 추적 중...'):
-            df = query_turso(sql_quiet)
-            if not df.empty:
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            else:
-                st.info("조건에 맞는 종목이 없습니다.")
+    if st.button("급등주 포착", key="btn_money"):
+        df = query_turso(sql_money)
+        st.dataframe(df, use_container_width=True)
 
+# ---------------------------------------------------------
+# 탭 3: 개미 털기 (Swing) - 캔들 분석 추가
+# ---------------------------------------------------------
 with tab3:
-    st.header("내 DB 테이블 목록")
-    if st.button("테이블 스캔"):
-        df = query_turso("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    st.header("🤫 개미 털고 조용히 가는 놈들")
+    st.caption("조건: 아래꼬리 달림(저가 대비 반등) + 기관 매집")
+    
+    # 저가보다 현재가가 2% 이상 높게 끝난 것 (장중 털고 올라옴)
+    sql_quiet = base_cte + """
+    SELECT 
+        종목명, 현재가, 저가, 시가,
+        ROUND((현재가 - 저가)*100.0/저가, 2) || '%' AS 아래꼬리반등,
+        기관순매수, 외국인순매수,
+        거래량
+    FROM latest_data
+    WHERE 저가 < 시가        -- 장중 음봉 갔다가
+      AND 현재가 > 저가 * 1.02 -- 저점에서 2% 이상 말아올림
+      AND 기관순매수 > 0     -- 기관이 받쳐줌
+    ORDER BY 기관순매수 DESC
+    LIMIT 30
+    """
+    
+    if st.button("눌림목 포착", key="btn_quiet"):
+        df = query_turso(sql_quiet)
+        st.dataframe(df, use_container_width=True)
+
+# ---------------------------------------------------------
+# 탭 4: 데이터 확인 (Raw Data)
+# ---------------------------------------------------------
+with tab4:
+    st.header("🔍 DB 데이터 까보기")
+    st.write("실제로 데이터가 잘 들어갔는지 최신 5건만 조회해볼게.")
+    
+    sql_check = """
+    SELECT 날짜, 종목명, 외국인순매수, 기관순매수, 시가, 고가, 저가, indate 
+    FROM Npaystocks 
+    ORDER BY rowid DESC 
+    LIMIT 5
+    """
+    if st.button("최신 데이터 5건 조회"):
+        df = query_turso(sql_check)
         st.dataframe(df)
