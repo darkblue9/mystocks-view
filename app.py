@@ -1,174 +1,176 @@
 import streamlit as st
 import pandas as pd
-import requests
-import json
+import libsql_experimental as libsql
 
-# 1. 화면 세팅
-st.set_page_config(page_title="동일의 주식 보물지도", page_icon="📈", layout="wide")
+# -------------------------------------------------------------------
+# 1. 페이지 설정 (반드시 맨 처음에 와야 함)
+# -------------------------------------------------------------------
+st.set_page_config(
+    page_title="나의 보물창고",
+    page_icon="💰",
+    layout="wide"
+)
 
-st.title("📈 동일의 주식 보물지도 (Pro Ver.)")
-st.markdown("Run by **Turso DB** & **Streamlit** | Data: **OHLC + 수급(외인/기관)**")
+# -------------------------------------------------------------------
+# 2. DB 연결 함수 (Turso)
+# -------------------------------------------------------------------
+def get_connection():
+    url = st.secrets["db"]["url"]
+    auth_token = st.secrets["db"]["auth_token"]
+    return libsql.connect("pykrx.db", sync_url=url, auth_token=auth_token)
 
-# 2. Turso HTTP API 통신 함수
-def query_turso(sql_query):
-    try:
-        db_url = st.secrets["TURSO_DB_URL"]
-        auth_token = st.secrets["TURSO_AUTH_TOKEN"]
-        
-        if db_url.startswith("libsql://"):
-            db_url = db_url.replace("libsql://", "https://")
-        
-        url = f"{db_url}/v2/pipeline"
-        headers = {"Authorization": f"Bearer {auth_token}"}
-        
-        payload = {
-            "requests": [
-                {"type": "execute", "stmt": {"sql": sql_query}}
-            ],
-        }
-        
-        response = requests.post(url, json=payload, headers=headers)
-        
-        if response.status_code == 200:
-            result = response.json()
-            try:
-                if not result['results'][0]['response']['result']: 
-                     return pd.DataFrame()
-                res_data = result['results'][0]['response']['result']
-                cols = [c['name'] for c in res_data['cols']]
-                rows = []
-                for r in res_data['rows']:
-                    row_vals = []
-                    for val in r:
-                        if isinstance(val, dict): 
-                            row_vals.append(val.get('value'))
-                        else:
-                            row_vals.append(val)
-                    rows.append(row_vals)
-                return pd.DataFrame(rows, columns=cols)
-            except (KeyError, IndexError):
-                return pd.DataFrame()
-        else:
-            st.error(f"통신 에러: {response.text}")
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"함수 에러: {e}")
-        return pd.DataFrame()
-
-# ---------------------------------------------------------
-# [핵심] 쿼리 저장소 (수급 데이터 반영)
-# ---------------------------------------------------------
-
-# 공통 CTE: 오늘 날짜 기준 데이터만 필터링 (최신 데이터)
-base_cte = """
-WITH latest_data AS (
+# -------------------------------------------------------------------
+# 3. 데이터 가져오기 (캐싱 적용)
+# -------------------------------------------------------------------
+@st.cache_data(ttl=600)  # 10분마다 갱신
+def load_data():
+    conn = get_connection()
+    # 가장 최근 날짜의 데이터만 가져오기
+    query = """
     SELECT * FROM Npaystocks 
     WHERE 날짜 = (SELECT MAX(날짜) FROM Npaystocks)
-)
-"""
-
-tab1, tab2, tab3, tab4 = st.tabs(["🐋 쌍끌이 매집 (수급)", "🔥 돈 냄새 (급등)", "🤫 개미 털기 (스윙)", "🔍 데이터 확인"])
-
-# ---------------------------------------------------------
-# 탭 1: 쌍끌이 매집 (Foreigner + Institution Buy)
-# ---------------------------------------------------------
-with tab1:
-    st.header("🐋 세력 형님들이 같이 사는 종목 (양매수)")
-    st.caption("조건: 외국인과 기관이 동시에 순매수 + 주가 상승")
-    
-    sql_whale = base_cte + """
-    SELECT 
-        종목명, 현재가, 
-        ROUND(등락률, 2) || '%' AS 등락률,
-        거래량,
-        외국인순매수, 기관순매수, 개인순매수,
-        업종명,
-        indate AS 수집시간
-    FROM latest_data
-    WHERE 외국인순매수 > 0 
-      AND 기관순매수 > 0
-      AND 등락률 > 0
-    ORDER BY (외국인순매수 + 기관순매수) DESC
-    LIMIT 30
     """
+    rows = conn.execute(query).fetchall()
     
-    if st.button("쌍끌이 포착", key="btn_whale"):
-        df = query_turso(sql_whale)
-        if not df.empty:
-            # 보기 좋게 포맷팅 (천 단위 콤마)
-            # 주의: 데이터가 문자열로 올 수 있어서 처리
-            st.dataframe(df, use_container_width=True)
+    # 컬럼명 가져오기
+    columns = [description[0] for description in conn.execute(query).description]
+    df = pd.DataFrame(rows, columns=columns)
+    
+    return df
+
+# -------------------------------------------------------------------
+# 4. 데이터 전처리 (방탄 조끼 입히기)
+# -------------------------------------------------------------------
+def process_data(df):
+    if df.empty:
+        return df
+
+    # (1) 숫자로 변환 (문자가 섞여 있으면 에러 나므로 강제 변환)
+    numeric_cols = ['현재가', '등락률', '거래량', '전일거래량', '시가', '고가', '저가', '외국인순매수', '기관순매수']
+    for col in numeric_cols:
+        if col in df.columns:
+            # 에러(문자)가 있으면 NaN으로 바꾸고 -> 0으로 채움
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # (2) 0 나누기 방지 (전일거래량이 0이면 1로 변경)
+    if '전일거래량' in df.columns:
+        df['전일거래량'] = df['전일거래량'].replace(0, 1)
+
+    # (3) 파생 지표 계산
+    # 거래량 급증 비율 (오늘 / 어제)
+    df['거래량비율'] = df['거래량'] / df['전일거래량']
+    
+    return df
+
+# -------------------------------------------------------------------
+# 5. 메인 화면 구성
+# -------------------------------------------------------------------
+def main():
+    st.title("💰 주식 보물창고 (Ver 2.0)")
+
+    # 데이터 로드
+    try:
+        raw_df = load_data()
+        df = process_data(raw_df)
+    except Exception as e:
+        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        return
+
+    if df.empty:
+        st.warning("데이터가 없습니다. 수집기를 확인해주세요.")
+        return
+
+    # 기준 날짜 표시
+    base_date = df['날짜'].iloc[0]
+    st.markdown(f"###### 📅 기준일: **{base_date}** (총 {len(df)}개 종목)")
+    st.divider()
+
+    # 탭 구성
+    tab1, tab2, tab3, tab4 = st.tabs(["🔥 돈냄새(거래량)", "🐜 개미털기", "🤝 쌍끌이 매수", "📋 전체 목록"])
+
+    # ----------------------------------------------------------------
+    # TAB 1: 돈냄새 (거래량 5배 폭발)
+    # ----------------------------------------------------------------
+    with tab1:
+        st.header("폭발적인 관심을 받는 종목")
+        # 조건: 거래량비율 5배(5.0) 이상
+        df_money = df[df['거래량비율'] >= 5.0].copy()
+        
+        # 보기 좋게 정렬
+        df_money = df_money.sort_values(by='거래량비율', ascending=False)
+        
+        if df_money.empty:
+            st.info("오늘 거래량이 5배 이상 터진 종목이 없습니다.")
         else:
-            st.info("오늘 쌍끌이 매수 종목이 없거나 데이터가 아직 수집되지 않았어.")
+            st.dataframe(
+                df_money[['종목명', '현재가', '등락률', '거래량', '전일거래량', '거래량비율']],
+                column_config={
+                    "현재가": st.column_config.NumberColumn(format="%d원"),
+                    "등락률": st.column_config.NumberColumn(format="%.2f%%"),
+                    "거래량비율": st.column_config.NumberColumn(format="%.1f배"),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
 
-# ---------------------------------------------------------
-# 탭 2: 돈 냄새 (Volume Spike)
-# ---------------------------------------------------------
-with tab2:
-    st.header("🔥 돈 냄새가 진동하는 놈들")
-    st.caption("조건: 거래량 폭발 + 외국인 매수 개입")
-    
-    sql_money = base_cte + """
-    SELECT 
-        종목명, 현재가, 
-        ROUND(등락률, 2) || '%' AS 등락률,
-        거래량, 전일거래량,
-        ROUND((거래량 - 전일거래량)*100.0/전일거래량, 1) || '%' AS 거래량급증,
-        외국인순매수, 
-        (현재가 * 거래량) / 100000000 AS 거래대금_억,
-        업종명
-    FROM latest_data
-    WHERE 거래량 >= 전일거래량 * 3
-      AND 전일거래량 > 0
-      AND 등락률 >= 3
-      AND 외국인순매수 > 0  -- 외국인이 냄새 맡고 온 것만
-    ORDER BY 등락률 DESC
-    LIMIT 30
-    """
-    
-    if st.button("급등주 포착", key="btn_money"):
-        df = query_turso(sql_money)
+    # ----------------------------------------------------------------
+    # TAB 2: 개미털기 (가격은 떨어졌는데 형님들은 샀다)
+    # ----------------------------------------------------------------
+    with tab2:
+        st.header("가격은 하락했지만 수급이 들어온 종목")
+        # 조건: 등락률 < 0 (음봉) AND (외국인 > 0 OR 기관 > 0)
+        condition_ant = (df['등락률'] < 0) & ((df['외국인순매수'] > 0) | (df['기관순매수'] > 0))
+        df_ant = df[condition_ant].copy()
+        
+        # 정렬: 외국인 많이 산 순서
+        df_ant = df_ant.sort_values(by='외국인순매수', ascending=False)
+
+        if df_ant.empty:
+            st.info("조건에 맞는 개미털기 의심 종목이 없습니다.")
+        else:
+            st.dataframe(
+                df_ant[['종목명', '현재가', '등락률', '외국인순매수', '기관순매수']],
+                column_config={
+                    "현재가": st.column_config.NumberColumn(format="%d원"),
+                    "등락률": st.column_config.NumberColumn(format="%.2f%%"),
+                    "외국인순매수": st.column_config.NumberColumn(format="%d주"),
+                    "기관순매수": st.column_config.NumberColumn(format="%d주"),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # ----------------------------------------------------------------
+    # TAB 3: 쌍끌이 (외국인 + 기관 동시 매수)
+    # ----------------------------------------------------------------
+    with tab3:
+        st.header("외국인과 기관이 같이 사는 종목")
+        # 조건: 외국인 > 0 AND 기관 > 0
+        condition_double = (df['외국인순매수'] > 0) & (df['기관순매수'] > 0)
+        df_double = df[condition_double].copy()
+        
+        # 합산 매수량으로 정렬
+        df_double['합산매수'] = df_double['외국인순매수'] + df_double['기관순매수']
+        df_double = df_double.sort_values(by='합산매수', ascending=False)
+
+        if df_double.empty:
+            st.info("쌍끌이 매수 종목이 없습니다.")
+        else:
+            st.dataframe(
+                df_double[['종목명', '현재가', '등락률', '외국인순매수', '기관순매수']],
+                column_config={
+                    "현재가": st.column_config.NumberColumn(format="%d원"),
+                    "등락률": st.column_config.NumberColumn(format="%.2f%%"),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # ----------------------------------------------------------------
+    # TAB 4: 전체 데이터 ddddd
+    # ----------------------------------------------------------------
+    with tab4:
         st.dataframe(df, use_container_width=True)
 
-# ---------------------------------------------------------
-# 탭 3: 개미 털기 (Swing) - 캔들 분석 추가
-# ---------------------------------------------------------
-with tab3:
-    st.header("🤫 개미 털고 조용히 가는 놈들")
-    st.caption("조건: 아래꼬리 달림(저가 대비 반등) + 기관 매집")
-    
-    # 저가보다 현재가가 2% 이상 높게 끝난 것 (장중 털고 올라옴)
-    sql_quiet = base_cte + """
-    SELECT 
-        종목명, 현재가, 저가, 시가,
-        ROUND((현재가 - 저가)*100.0/저가, 2) || '%' AS 아래꼬리반등,
-        기관순매수, 외국인순매수,
-        거래량
-    FROM latest_data
-    WHERE 저가 < 시가        -- 장중 음봉 갔다가
-      AND 현재가 > 저가 * 1.02 -- 저점에서 2% 이상 말아올림
-      AND 기관순매수 > 0     -- 기관이 받쳐줌
-    ORDER BY 기관순매수 DESC
-    LIMIT 30
-    """
-    
-    if st.button("눌림목 포착", key="btn_quiet"):
-        df = query_turso(sql_quiet)
-        st.dataframe(df, use_container_width=True)
-
-# ---------------------------------------------------------
-# 탭 4: 데이터 확인 (Raw Data)
-# ---------------------------------------------------------
-with tab4:
-    st.header("🔍 DB 데이터 까보기")
-    st.write("실제로 데이터가 잘 들어갔는지 최신 5건만 조회해볼게.")
-    
-    sql_check = """
-    SELECT 날짜, 종목명, 외국인순매수, 기관순매수, 시가, 고가, 저가, indate 
-    FROM Npaystocks 
-    ORDER BY rowid DESC 
-    LIMIT 5
-    """
-    if st.button("최신 데이터 5건 조회"):
-        df = query_turso(sql_check)
-        st.dataframe(df)
+if __name__ == "__main__":
+    main()
