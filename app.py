@@ -17,7 +17,19 @@ st.set_page_config(
 def get_connection():
     url = st.secrets["db"]["url"]
     auth_token = st.secrets["db"]["auth_token"]
-    return libsql.connect("pykrx.db", sync_url=url, auth_token=auth_token)
+    
+# 1. 연결
+    conn = libsql.connect("pykrx.db", sync_url=url, auth_token=auth_token)
+    
+    # 2. 강제 동기화 (이게 핵심!)
+    # 앱이 켜질 때 서버에 있는 새 데이터를 강제로 다운로드함
+    try:
+        conn.sync() 
+    except Exception as e:
+        # 혹시 sync가 실패해도 앱이 죽지는 않게 로그만 남김
+        print(f"⚠️ 동기화 실패 (기존 데이터 사용): {e}")
+        
+    return conn
 
 # -------------------------------------------------------------------
 # 3. 데이터 로드 (오늘 & 어제 동시 로딩)
